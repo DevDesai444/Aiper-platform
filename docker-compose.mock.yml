@@ -1,0 +1,33 @@
+name: aiper-mock
+
+# Frontend + scripted mock backend. No credentials, no Postgres, no Qdrant.
+#   docker compose -f docker-compose.mock.yml up --build
+
+services:
+  mock:
+    build:
+      context: ./mock
+    restart: unless-stopped
+    environment:
+      CORS_ORIGINS: http://localhost:3000
+      STORAGE_DIR: /data/uploads
+    ports:
+      - "8000:8000"
+    volumes:
+      - mock_uploads:/data/uploads
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - mock
+
+volumes:
+  mock_uploads:

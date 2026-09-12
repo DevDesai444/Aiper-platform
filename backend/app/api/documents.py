@@ -1,0 +1,396 @@
+"""Versioned documents: commits, diffs, restore and sharing.
+
+History is append-only. Restoring an old revision appends a new one; nothing is
+ever erased or rewritten.
+"""
+
+from __future__ import annotations
+
+import uuid
+from typing import Literal
+
+from fastapi import APIRouter, HTTPException, Response, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app import schemas
+from app.core.deps import CurrentUser, DbSession
+from app.db.models import (
+    Document,
+    DocumentCollaborator,
+    Revision,
+    RevisionDiff,
+    User,
+)
+from app.services.diff import diff_text
+from app.services.documents import empty_document, markdown_to_tiptap, tiptap_to_text
+
+router = APIRouter(prefix="/documents", tags=["documents"])
+
+Access = Literal["owner", "editor", "viewer"]
+
+
+# ───────────────────────────── access control ─────────────────────────────
+
+
+async def resolve_access(db: AsyncSession, document: Document, user: User) -> Access:
+    if document.owner_id == user.id:
+        return "owner"
+    share = (
+        await db.execute(
+            select(DocumentCollaborator).where(
+                DocumentCollaborator.document_id == document.id,
+                DocumentCollaborator.email == user.email,
+            )
+        )
+    ).scalar_one_or_none()
+    if share is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
+    return "viewer" if share.role == "viewer" else "editor"
+
+
+async def _load(db: AsyncSession, document_id: uuid.UUID) -> Document:
+    document = (
+        await db.execute(
+            select(Document)
+            .options(
+                selectinload(Document.revisions).selectinload(Revision.diff),
+                selectinload(Document.collaborators),
+            )
+            .where(Document.id == document_id)
+        )
+    ).scalar_one_or_none()
+    if document is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
+    return document
+
+
+def _revision_out(revision: Revision) -> schemas.RevisionOut:
+    diff = revision.diff
+    return schemas.RevisionOut(
+        id=revision.id,
+        revision_number=revision.revision_number,
+        parent_revision_id=revision.parent_revision_id,
+        commit_message=revision.commit_message,
+        source=revision.source,
+        author_email=revision.author_email,
+        author_name=revision.author_name,
+        created_at=revision.created_at,
+        additions=diff.additions if diff else 0,
+        deletions=diff.deletions if diff else 0,
+        modifications=diff.modifications if diff else 0,
+    )
+
+
+async def _detail(db: AsyncSession, document: Document, access: Access) -> schemas.DocumentDetail:
+    owner_email = (
+        await db.execute(select(User.email).where(User.id == document.owner_id))
+    ).scalar_one_or_none() or ""
+    revisions = sorted(document.revisions, key=lambda r: r.revision_number, reverse=True)
+    return schemas.DocumentDetail(
+        id=document.id,
+        title=document.title,
+        revision_count=document.revision_count,
+        created_at=document.created_at,
+        updated_at=document.updated_at,
+        access=access,
+        owner_email=owner_email,
+        content_json=document.content_json or empty_document(),
+        revisions=[_revision_out(r) for r in revisions],
+        collaborators=[
+            schemas.CollaboratorOut.model_validate(c) for c in document.collaborators
+        ],
+    )
+
+
+async def _commit(
+    db: AsyncSession,
+    *,
+    document: Document,
+    content_json: dict,
+    message: str,
+    author: User,
+    source: str,
+) -> Revision:
+    """Snapshot the content, diff it against the head, append a revision."""
+    new_text = tiptap_to_text(content_json)
+    delta = diff_text(document.content_text or "", new_text)
+
+    revision = Revision(
+        document_id=document.id,
+        parent_revision_id=document.head_revision_id,
+        revision_number=document.revision_count + 1,
+        commit_message=message.strip() or "Update",
+        source=source,
+        author_id=author.id,
+        author_email=author.email,
+        author_name=author.full_name or author.email,
+        content_json=content_json,
+        content_text=new_text,
+    )
+    db.add(revision)
+    await db.flush()
+
+    db.add(
+        RevisionDiff(
+            revision_id=revision.id,
+            blocks=delta["blocks"],
+            additions=delta["additions"],
+            deletions=delta["deletions"],
+            modifications=delta["modifications"],
+        )
+    )
+
+    document.content_json = content_json
+    document.content_text = new_text
+    document.revision_count = revision.revision_number
+    document.head_revision_id = revision.id
+    return revision
+
+
+# ──────────────────────────────── routes ──────────────────────────────────
+
+
+@router.get("", response_model=list[schemas.DocumentOut])
+async def list_documents(user: CurrentUser, db: DbSession) -> list[schemas.DocumentOut]:
+    owned = (
+        (await db.execute(select(Document).where(Document.owner_id == user.id))).scalars().all()
+    )
+    shared_ids = (
+        (
+            await db.execute(
+                select(DocumentCollaborator.document_id).where(
+                    DocumentCollaborator.email == user.email
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    shared = (
+        (await db.execute(select(Document).where(Document.id.in_(shared_ids)))).scalars().all()
+        if shared_ids
+        else []
+    )
+
+    out = [
+        schemas.DocumentOut(
+            id=d.id,
+            title=d.title,
+            revision_count=d.revision_count,
+            created_at=d.created_at,
+            updated_at=d.updated_at,
+            access="owner",
+            owner_email=user.email,
+        )
+        for d in owned
+    ] + [
+        schemas.DocumentOut(
+            id=d.id,
+            title=d.title,
+            revision_count=d.revision_count,
+            created_at=d.created_at,
+            updated_at=d.updated_at,
+            access="shared",
+            owner_email="",
+        )
+        for d in shared
+    ]
+    return sorted(out, key=lambda d: d.updated_at, reverse=True)
+
+
+@router.post("", response_model=schemas.DocumentDetail, status_code=status.HTTP_201_CREATED)
+async def create_document(
+    payload: schemas.DocumentCreate, user: CurrentUser, db: DbSession
+) -> schemas.DocumentDetail:
+    document = Document(owner_id=user.id, title=payload.title)
+    db.add(document)
+    await db.flush()
+    await _commit(
+        db,
+        document=document,
+        content_json=payload.content_json or empty_document(),
+        message="Document created",
+        author=user,
+        source="human",
+    )
+    await db.commit()
+    return await _detail(db, await _load(db, document.id), "owner")
+
+
+@router.post(
+    "/from-markdown", response_model=schemas.DocumentDetail, status_code=status.HTTP_201_CREATED
+)
+async def create_from_markdown(
+    payload: schemas.DocumentFromMarkdown, user: CurrentUser, db: DbSession
+) -> schemas.DocumentDetail:
+    """The agent's way into version control — first revision is source='agent'."""
+    document = Document(owner_id=user.id, title=payload.title)
+    db.add(document)
+    await db.flush()
+    await _commit(
+        db,
+        document=document,
+        content_json=markdown_to_tiptap(payload.markdown),
+        message=payload.commit_message,
+        author=user,
+        source="agent",
+    )
+    await db.commit()
+    return await _detail(db, await _load(db, document.id), "owner")
+
+
+@router.get("/{document_id}", response_model=schemas.DocumentDetail)
+async def get_document(
+    document_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> schemas.DocumentDetail:
+    document = await _load(db, document_id)
+    access = await resolve_access(db, document, user)
+    return await _detail(db, document, access)
+
+
+@router.patch("/{document_id}", response_model=schemas.DocumentOut)
+async def rename_document(
+    document_id: uuid.UUID, payload: schemas.TitleUpdate, user: CurrentUser, db: DbSession
+) -> Document:
+    document = await _load(db, document_id)
+    access = await resolve_access(db, document, user)
+    if access == "viewer":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Read-only access")
+    document.title = payload.title
+    await db.commit()
+    await db.refresh(document)
+    return document
+
+
+@router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+async def delete_document(document_id: uuid.UUID, user: CurrentUser, db: DbSession) -> None:
+    document = await _load(db, document_id)
+    if document.owner_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the owner can delete a document")
+    await db.delete(document)
+    await db.commit()
+
+
+@router.post("/{document_id}/commits", response_model=schemas.DocumentDetail)
+async def commit(
+    document_id: uuid.UUID, payload: schemas.CommitCreate, user: CurrentUser, db: DbSession
+) -> schemas.DocumentDetail:
+    document = await _load(db, document_id)
+    access = await resolve_access(db, document, user)
+    if access == "viewer":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Read-only access")
+
+    await _commit(
+        db,
+        document=document,
+        content_json=payload.content_json,
+        message=payload.commit_message,
+        author=user,
+        source="human",
+    )
+    await db.commit()
+    return await _detail(db, await _load(db, document_id), access)
+
+
+@router.get("/{document_id}/revisions/{revision_id}/diff", response_model=schemas.DiffOut)
+async def get_diff(
+    document_id: uuid.UUID, revision_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> schemas.DiffOut:
+    document = await _load(db, document_id)
+    await resolve_access(db, document, user)
+    revision = next((r for r in document.revisions if r.id == revision_id), None)
+    if revision is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Revision not found")
+    diff = revision.diff
+    if diff is None:
+        return schemas.DiffOut()
+    return schemas.DiffOut(
+        additions=diff.additions,
+        deletions=diff.deletions,
+        modifications=diff.modifications,
+        blocks=[schemas.DiffBlock(**b) for b in diff.blocks],
+    )
+
+
+@router.post("/{document_id}/revisions/{revision_id}/restore", response_model=schemas.DocumentDetail)
+async def restore(
+    document_id: uuid.UUID, revision_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> schemas.DocumentDetail:
+    """Restoring adds a commit. Nothing is ever erased."""
+    document = await _load(db, document_id)
+    access = await resolve_access(db, document, user)
+    if access == "viewer":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Read-only access")
+
+    revision = next((r for r in document.revisions if r.id == revision_id), None)
+    if revision is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Revision not found")
+
+    await _commit(
+        db,
+        document=document,
+        content_json=revision.content_json,
+        message=f"Restore revision {revision.revision_number}",
+        author=user,
+        source="human",
+    )
+    await db.commit()
+    return await _detail(db, await _load(db, document_id), access)
+
+
+@router.post(
+    "/{document_id}/collaborators",
+    response_model=schemas.CollaboratorOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_collaborator(
+    document_id: uuid.UUID,
+    payload: schemas.CollaboratorCreate,
+    user: CurrentUser,
+    db: DbSession,
+) -> DocumentCollaborator:
+    """Mocked invitation: no mail is sent and no OTP is issued.
+
+    An existing account is linked immediately; anyone else is stored as pending
+    and claimed when they register.
+    """
+    document = await _load(db, document_id)
+    if document.owner_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the owner can share a document")
+
+    email = payload.email.lower()
+    if email == user.email:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "You already own this document")
+    if any(c.email == email for c in document.collaborators):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Already shared with that address")
+
+    invitee = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
+    share = DocumentCollaborator(
+        document_id=document.id,
+        email=email,
+        role=payload.role,
+        user_id=invitee.id if invitee else None,
+        invite_status="accepted" if invitee else "pending",
+    )
+    db.add(share)
+    await db.commit()
+    await db.refresh(share)
+    return share
+
+
+@router.delete(
+    "/{document_id}/collaborators/{collaborator_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response
+)
+async def remove_collaborator(
+    document_id: uuid.UUID, collaborator_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> None:
+    document = await _load(db, document_id)
+    if document.owner_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the owner can manage sharing")
+    share = next((c for c in document.collaborators if c.id == collaborator_id), None)
+    if share is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Collaborator not found")
+    await db.delete(share)
+    await db.commit()

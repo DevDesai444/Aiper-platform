@@ -1,0 +1,33 @@
+# Unpinned on purpose: every image build resolves the latest release of each.
+
+# API
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
+pydantic-settings
+email-validator
+
+# Persistence
+sqlalchemy[asyncio]
+asyncpg
+greenlet
+
+# Auth
+bcrypt
+PyJWT
+
+# Agent runtime
+deepagents
+langchain
+langchain-core
+langgraph
+langchain-openai
+
+# Retrieval
+qdrant-client
+
+# Document parsing (page-aware)
+pypdf
+python-pptx
+python-docx

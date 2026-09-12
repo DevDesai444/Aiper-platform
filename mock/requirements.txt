@@ -1,0 +1,19 @@
+# Unpinned on purpose: every image build resolves the latest release of each.
+
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
+pydantic-settings
+email-validator
+
+bcrypt
+PyJWT
+
+# Real, page-aware parsing — the mock does not fake this part.
+pypdf
+python-pptx
+python-docx
+
+# Used once, at boot, to generate the two seeded sample PDFs.
+reportlab
