@@ -10,8 +10,7 @@ from __future__ import annotations
 
 import re
 
-from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Organisation
@@ -20,6 +19,8 @@ DEFAULT_ORG_NAME = "Default"
 DEFAULT_ORG_SLUG = "default"
 
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
+
+_ENSURE = text("SELECT * FROM aiper_ensure_organisation(:name, :slug)")
 
 
 def slugify(name: str) -> str:
@@ -35,18 +36,20 @@ def slugify(name: str) -> str:
 async def ensure_organisation(db: AsyncSession, name: str) -> Organisation:
     """Find the organisation for this name, creating it the first time.
 
-    Written as an upsert because this now sits on the sign-in path: the first
-    two concurrent logins would otherwise race on the unique slug, and a failed
-    INSERT poisons the surrounding transaction rather than being recoverable.
+    An upsert, because this sits on the sign-in path: the first two concurrent
+    logins would otherwise race on the unique slug, and a failed INSERT poisons
+    the surrounding transaction rather than being recoverable.
+
+    It runs through ``aiper_ensure_organisation`` (SECURITY DEFINER, migration
+    0003): both callers — registration and lazy provisioning — act before the
+    account exists, which is exactly the moment row-level security shows them
+    no organisation at all. The slug stays computed here, in the one Python
+    slug rule the migration was verified against.
     """
     label = name.strip() or DEFAULT_ORG_NAME
     slug = slugify(name)
 
-    await db.execute(
-        pg_insert(Organisation)
-        .values(name=label, slug=slug)
-        .on_conflict_do_nothing(index_elements=["slug"])
-    )
-    return (
-        await db.execute(select(Organisation).where(Organisation.slug == slug))
-    ).scalar_one()
+    row = (await db.execute(_ENSURE, {"name": label, "slug": slug})).mappings().one()
+    # A detached value object: the row already exists, adding it to the
+    # session would try to insert it again. Callers only read from it.
+    return Organisation(**dict(row))

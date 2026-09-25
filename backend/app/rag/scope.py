@@ -71,9 +71,11 @@ def scope_provider(*, user_id: uuid.UUID, org_id: uuid.UUID | None) -> ScopeProv
     """
 
     async def fresh() -> RetrievalScope:
-        from app.db.base import SessionLocal
+        from app.db.base import user_scoped_session
 
-        async with SessionLocal() as db:
+        # Identity-bound: under row-level security an anonymous session would
+        # see no projects at all and silently shrink the scope to nothing.
+        async with user_scoped_session(user_id) as db:
             return await compute_scope(db, user_id=user_id, org_id=org_id)
 
     return fresh

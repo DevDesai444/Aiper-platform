@@ -9,6 +9,7 @@ from sqlalchemy import or_, select
 from app import schemas
 from app.core.deps import CurrentUser, DbSession
 from app.db.models import DocumentTemplate
+from app.services import audit
 
 router = APIRouter(prefix="/templates", tags=["templates"])
 
@@ -43,6 +44,16 @@ async def create_template(
         is_builtin=False,
     )
     db.add(template)
+    await db.flush()
+    await audit.record_audit(
+        db,
+        org_id=user.org_id,
+        actor_id=user.id,
+        action=audit.TEMPLATE_CREATE,
+        subject_type="template",
+        subject_id=template.id,
+        payload={"name": template.name, "key": template.key},
+    )
     await db.commit()
     await db.refresh(template)
     return template
@@ -55,5 +66,14 @@ async def delete_template(template_id: uuid.UUID, user: CurrentUser, db: DbSessi
     ).scalar_one_or_none()
     if template is None or template.owner_id != user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Template not found")
+    await audit.record_audit(
+        db,
+        org_id=user.org_id,
+        actor_id=user.id,
+        action=audit.TEMPLATE_DELETE,
+        subject_type="template",
+        subject_id=template.id,
+        payload={"name": template.name, "key": template.key},
+    )
     await db.delete(template)
     await db.commit()

@@ -296,7 +296,7 @@ async def db(session_factory) -> AsyncIterator[AsyncSession]:
 async def client(session_factory) -> AsyncClient:
     """The auth router, with the real current_user dependency."""
     from app.api import auth as auth_module
-    from app.db.base import get_session
+    from app.core.deps import get_session
 
     async def _get_test_session():
         async with session_factory() as session:
@@ -347,6 +347,92 @@ async def api(session_factory) -> AsyncIterator[Api]:
             yield session
 
     holder: dict[str, object] = {}
+    app.dependency_overrides[get_session] = request_session
+    app.dependency_overrides[current_user] = lambda: holder["user"]
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield Api(client, lambda user: holder.__setitem__("user", user))
+    app.dependency_overrides.clear()
+
+
+# ─────────────────────────── the unprivileged role ────────────────────────────
+#
+# Everything above connects as the migration user — in CI and dev that is the
+# bootstrap superuser, which Postgres exempts from row-level security entirely.
+# The fixtures below connect as aiper_app, the role the API really runs as, so
+# a test that uses them is subject to every policy of migrations 0003/0004.
+
+APP_ROLE_USER = "aiper_app"
+APP_ROLE_PASSWORD = os.environ.get("AIPER_APP_DB_PASSWORD", "aiper_app_password")
+
+
+def with_credentials(dsn: str, user: str, password: str) -> str:
+    """Swap the credentials in a DSN, keeping scheme, host and database."""
+    scheme, _, rest = dsn.partition("://")
+    _, _, host_part = rest.rpartition("@")
+    return f"{scheme}://{user}:{password}@{host_part}"
+
+
+@pytest_asyncio.fixture
+async def app_engine(engine, migrated_dsn: str):
+    """An engine connected as aiper_app. Depends on `engine` for the truncate."""
+    eng = create_async_engine(
+        with_credentials(migrated_dsn, APP_ROLE_USER, APP_ROLE_PASSWORD),
+        poolclass=NullPool,
+        future=True,
+    )
+    try:
+        yield eng
+    finally:
+        await eng.dispose()
+
+
+@pytest_asyncio.fixture
+async def app_session_factory(app_engine) -> async_sessionmaker[AsyncSession]:
+    return async_sessionmaker(app_engine, expire_on_commit=False, class_=AsyncSession)
+
+
+def as_user(factory: async_sessionmaker[AsyncSession], user) -> AsyncSession:
+    """An app-role session carrying this user's identity, as the API would open it.
+
+    Every transaction it begins runs set_config('app.user_id', …, true) first —
+    the same event listener production uses (app.db.base). Takes a User or a
+    bare id, so a test can keep acting after a rollback expired its instances.
+    """
+    return factory(info={"rls_user_id": str(getattr(user, "id", user))})
+
+
+def anonymous(factory: async_sessionmaker[AsyncSession]) -> AsyncSession:
+    """An app-role session with no identity: the deny-all baseline."""
+    return factory()
+
+
+@pytest_asyncio.fixture
+async def rls_api(app_session_factory) -> AsyncIterator[Api]:
+    """The tenancy routes on the *unprivileged* engine, policies live.
+
+    Unlike `api`, the request sessions here connect as aiper_app and carry the
+    acting user's identity, so every route in these tests runs with row-level
+    security enforced underneath the application checks.
+    """
+    from app.api import audit as audit_module
+    from app.api import documents, projects
+    from app.core.deps import current_user, get_session
+
+    app = FastAPI()
+    versioned = APIRouter(prefix="/api/v1")
+    versioned.include_router(projects.router)
+    versioned.include_router(documents.router)
+    versioned.include_router(audit_module.router)
+    app.include_router(versioned)
+
+    holder: dict[str, object] = {}
+
+    async def request_session() -> AsyncIterator[AsyncSession]:
+        async with as_user(app_session_factory, holder["user"]) as session:
+            yield session
+
     app.dependency_overrides[get_session] = request_session
     app.dependency_overrides[current_user] = lambda: holder["user"]
 

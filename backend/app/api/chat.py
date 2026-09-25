@@ -18,7 +18,7 @@ from app.agents.runtime import run_agent_turn
 from app.agents.skills import SkillContext
 from app.config import settings
 from app.core.deps import CurrentUser, DbSession
-from app.db.base import SessionLocal
+from app.db.base import user_scoped_session
 from app.db.models import ChatMessage, ChatSession, DocumentTemplate, FileAsset, User
 from app.rag.scope import accessible_files_clause
 
@@ -145,7 +145,10 @@ async def _turn(
         yield _sse(event)
 
     content = "".join(answer).strip()
-    async with SessionLocal() as db:
+    # The request-scoped session (and its identity) is gone once the stream is
+    # running; this one is bound to the same user, so the chat_messages insert
+    # policy sees the turn's owner and nobody else.
+    async with user_scoped_session(user_id) as db:
         message = ChatMessage(
             session_id=session_id,
             role="assistant",
