@@ -7,6 +7,7 @@ ever erased or rewritten.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Response, status
@@ -19,6 +20,7 @@ from app.core.deps import CurrentUser, DbSession
 from app.db.models import (
     Document,
     DocumentCollaborator,
+    DocumentComment,
     Project,
     Revision,
     RevisionDiff,
@@ -518,4 +520,173 @@ async def remove_collaborator(
         payload={"email": share.email, "role": share.role},
     )
     await db.delete(share)
+    await db.commit()
+
+
+# ─────────────────────────────── comments (E6) ────────────────────────────────
+#
+# A comment is a body + display metadata anchored to a TipTap ``comment`` mark
+# in the document. The mark carries a client-generated ``markId`` and lives in
+# ``documents.content_json`` (durable at commit time); the bodies live in the
+# ``document_comments`` table (durable immediately). See
+# ``0005_document_comments.py`` for the schema and ``commentMark.ts`` in the
+# frontend for the mark itself.
+#
+# Access:
+#   viewer  — GET (list a document's comments)
+#   editor  — POST (add), POST /resolve (mark all comments in a thread resolved)
+#   author  — DELETE a thread they wrote every comment of
+#   owner   — DELETE any thread
+#
+# Envelope shapes match v1 so the frontend port reuses its serialisers: GET
+# returns ``{"items": [...]}`` and resolve returns ``{"comments": [...]}``.
+
+
+def _comment_out(comment: DocumentComment) -> schemas.CommentOut:
+    return schemas.CommentOut(
+        id=comment.id,
+        document_id=comment.document_id,
+        mark_id=comment.mark_id,
+        body=comment.body,
+        quoted_text=comment.quoted_text,
+        author_id=comment.author_id,
+        author_email=comment.author_email,
+        author_name=comment.author_name,
+        resolved_at=comment.resolved_at,
+        created_at=comment.created_at,
+    )
+
+
+async def _load_document_row(db: AsyncSession, document_id: uuid.UUID) -> Document:
+    document = (
+        await db.execute(select(Document).where(Document.id == document_id))
+    ).scalar_one_or_none()
+    if document is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
+    return document
+
+
+async def _load_thread(
+    db: AsyncSession, document_id: uuid.UUID, mark_id: str
+) -> list[DocumentComment]:
+    result = await db.execute(
+        select(DocumentComment)
+        .where(
+            DocumentComment.document_id == document_id,
+            DocumentComment.mark_id == mark_id,
+        )
+        .order_by(DocumentComment.created_at)
+    )
+    return list(result.scalars().all())
+
+
+@router.get("/{document_id}/comments", response_model=schemas.CommentList)
+async def list_comments(
+    document_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> schemas.CommentList:
+    """Every comment on the document, oldest first. Viewer-and-up."""
+    await resolve_access(db, document_id, user, "viewer")
+    result = await db.execute(
+        select(DocumentComment)
+        .where(DocumentComment.document_id == document_id)
+        .order_by(DocumentComment.created_at)
+    )
+    return schemas.CommentList(items=[_comment_out(c) for c in result.scalars().all()])
+
+
+@router.post(
+    "/{document_id}/comments",
+    response_model=schemas.CommentOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_comment(
+    document_id: uuid.UUID,
+    payload: schemas.CommentCreate,
+    user: CurrentUser,
+    db: DbSession,
+) -> schemas.CommentOut:
+    """Editor-and-up. The client applies the mark to the editor only AFTER
+    this POST succeeds, so a failed create never leaves an orphan highlight."""
+    await resolve_access(db, document_id, user, "editor")
+    document = await _load_document_row(db, document_id)
+
+    comment = DocumentComment(
+        document_id=document.id,
+        org_id=document.org_id,
+        project_id=document.project_id,
+        mark_id=payload.mark_id,
+        body=payload.body,
+        quoted_text=payload.quoted_text,
+        author_id=user.id,
+        author_email=user.email,
+        author_name=user.full_name or user.email,
+    )
+    db.add(comment)
+    await db.commit()
+    await db.refresh(comment)
+    return _comment_out(comment)
+
+
+@router.post(
+    "/{document_id}/comments/{mark_id}/resolve",
+    response_model=schemas.CommentResolveResponse,
+)
+async def resolve_comment_thread(
+    document_id: uuid.UUID,
+    mark_id: str,
+    user: CurrentUser,
+    db: DbSession,
+) -> schemas.CommentResolveResponse:
+    """Mark every comment in the thread resolved (idempotent — already-resolved
+    rows are left alone). Editor-and-up.
+
+    The highlight itself stays on the document — the client may render a
+    resolved thread differently, but the range remains navigable so someone
+    can reopen the discussion at any time.
+    """
+    await resolve_access(db, document_id, user, "editor")
+    thread = await _load_thread(db, document_id, mark_id)
+    if not thread:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Comment thread not found")
+
+    now = datetime.now(timezone.utc)
+    for comment in thread:
+        if comment.resolved_at is None:
+            comment.resolved_at = now
+            comment.resolved_by_id = user.id
+    await db.commit()
+    for comment in thread:
+        await db.refresh(comment)
+    return schemas.CommentResolveResponse(
+        comments=[_comment_out(c) for c in thread]
+    )
+
+
+@router.delete(
+    "/{document_id}/comments/{mark_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def delete_comment_thread(
+    document_id: uuid.UUID,
+    mark_id: str,
+    user: CurrentUser,
+    db: DbSession,
+) -> None:
+    """Delete the whole thread. An owner may delete anyone's; a non-owner
+    editor may only delete a thread they authored every comment of."""
+    access = await resolve_access(db, document_id, user, "editor")
+    thread = await _load_thread(db, document_id, mark_id)
+    if not thread:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Comment thread not found")
+
+    if access != "owner":
+        if any(c.author_id != user.id for c in thread):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "Only the thread's author or the document owner can delete this thread",
+            )
+
+    for comment in thread:
+        await db.delete(comment)
     await db.commit()
