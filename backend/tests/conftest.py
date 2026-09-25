@@ -78,6 +78,7 @@ def mint_hs256(
     audience: str | None = TEST_AUDIENCE,
     email: str | None = "user@example.com",
     full_name: str | None = None,
+    organisation: str | None = None,
     expires_in: int = 3600,
 ) -> str:
     """Mint an HS256 Supabase-style access token. Omit a field (pass None) to drop it."""
@@ -91,8 +92,13 @@ def mint_hs256(
         payload["aud"] = audience
     if email is not None:
         payload["email"] = email
+    metadata: dict[str, Any] = {}
     if full_name is not None:
-        payload["user_metadata"] = {"full_name": full_name}
+        metadata["full_name"] = full_name
+    if organisation is not None:
+        metadata["organisation"] = organisation
+    if metadata:
+        payload["user_metadata"] = metadata
     return jwt.encode(payload, secret, algorithm="HS256")
 
 
