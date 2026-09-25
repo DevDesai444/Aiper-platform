@@ -634,13 +634,28 @@ def _policies() -> None:
         ),
     )
 
-    # ── private-to-owner tables ──
+    # ── files ──
+    # The same rule the retrieval plane enforces (app.rag.scope
+    # accessible_files_clause): org boundary first, then own uploads or a
+    # project the resolver admits. Writes stay the uploader's: filing into a
+    # project takes editor access on it, and only the owner retitles or
+    # removes an asset.
     own = f"owner_id = {UID} AND org_id = {UORG}"
-    policy("file_assets", "SELECT", using=own)
-    policy("file_assets", "INSERT", check=own)
-    policy("file_assets", "UPDATE", using=own, check=own)
+    readable_file = (
+        f"org_id = {UORG} AND (owner_id = {UID}"
+        f" OR (project_id IS NOT NULL"
+        f" AND {resolver}({UID}, 'project', project_id) IS NOT NULL))"
+    )
+    file_write = (
+        f"{own} AND (project_id IS NULL"
+        f" OR {resolver}({UID}, 'project', project_id) IN ('owner', 'editor'))"
+    )
+    policy("file_assets", "SELECT", using=readable_file)
+    policy("file_assets", "INSERT", check=file_write)
+    policy("file_assets", "UPDATE", using=own, check=file_write)
     policy("file_assets", "DELETE", using=own)
 
+    # ── private-to-owner tables ──
     policy("chat_sessions", "SELECT", using=own)
     policy("chat_sessions", "INSERT", check=own)
     policy("chat_sessions", "UPDATE", using=own, check=own)

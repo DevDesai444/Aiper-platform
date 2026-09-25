@@ -536,3 +536,43 @@ async def test_supabase_provisioning_under_rls(
         await db.execute(select(User).where(User.id == subject))
     ).scalar_one()
     assert provisioned.email == "astro@corp.example"
+
+
+async def test_project_filed_assets_follow_the_project_grant(db, app_session_factory):
+    """The file_assets policy mirrors the retrieval plane's rule exactly:
+    own uploads, or a project the resolver admits — never a colleague's
+    private upload, never another organisation's anything."""
+    from app.db.models import FileAsset
+
+    from tests.factories import make_file_asset
+
+    org_a = await make_org(db, "org-a")
+    org_b = await make_org(db, "org-b")
+    alice = await make_user(db, org_a, "alice@a.example")
+    carol = await make_user(db, org_a, "carol@a.example")
+    bob = await make_user(db, org_b, "bob@b.example")
+
+    project = await make_project(db, org_a, alice)
+    filed = await make_file_asset(db, alice, "shared.pdf", project=project)
+    private = await make_file_asset(db, alice, "private.pdf")
+    await make_grant(
+        db,
+        org_id=org_a.id,
+        subject_type="project",
+        subject_id=project.id,
+        user=carol,
+        role="viewer",
+    )
+    await db.commit()
+    filed_id, private_id = filed.id, private.id
+
+    async with as_user(app_session_factory, carol) as session:
+        visible = set((await session.execute(select(FileAsset.id))).scalars().all())
+    assert visible == {filed_id}, "a project grant reaches filed assets and nothing else"
+
+    async with as_user(app_session_factory, alice) as session:
+        visible = set((await session.execute(select(FileAsset.id))).scalars().all())
+    assert visible == {filed_id, private_id}
+
+    async with as_user(app_session_factory, bob) as session:
+        assert (await session.execute(select(FileAsset.id))).scalars().all() == []
