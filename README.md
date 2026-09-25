@@ -619,9 +619,7 @@ Stated plainly, because a v1 that pretends otherwise wastes the reviewer's time.
 - Tokens live in `localStorage`, which is the pragmatic choice for a bearer-token
   SPA but is readable by any script on the origin. A production deployment should
   move to an httpOnly refresh cookie.
-- The frontend container builds with `typescript.ignoreBuildErrors`, so a type
-  error never blocks `docker compose up`. `npx tsc --noEmit` against the strict
-  `tsconfig.json` is the gate instead, and belongs in CI.
+- TypeScript build errors surface in CI (`npx tsc --noEmit`), not at `docker compose up`.
 
 **Retrieval**
 
@@ -649,3 +647,72 @@ Stated plainly, because a v1 that pretends otherwise wastes the reviewer's time.
 - The prose and the verdicts are scripted. Parsing, retrieval, page citations,
   the event stream, version control and access control are real. It is a fair
   test of everything except the model.
+
+---
+
+## Development
+
+### Prerequisites
+
+- Python 3.12 (`python3.12 -m venv venv`)
+- Node 22 + npm 10
+- Docker (colima or Docker Desktop) for `docker compose`
+
+### Backend — local setup
+
+```bash
+cd backend
+python3.12 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt -r requirements-dev.txt
+```
+
+**Required environment variable for local development:**
+
+```bash
+export AIPER_DEV_MODE=1   # bypasses production secret checks at startup
+```
+
+Without `AIPER_DEV_MODE=1` the backend refuses to start unless `JWT_SECRET` and
+`DATABASE_URL` are set to non-default values (fail-closed protection for production).
+
+### Frontend — local setup
+
+```bash
+cd frontend
+npm ci --no-fund --no-audit
+NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev
+```
+
+### Running tests
+
+```bash
+# From the repo root
+PYTHONPATH=backend AIPER_DEV_MODE=1 pytest backend/tests -v
+```
+
+The smoke test hits `/health` via httpx's ASGI transport — no database required.
+CI provides a postgres:16 service so other lane tests can run DB-backed fixtures later.
+
+### Linting
+
+```bash
+ruff check backend/app
+```
+
+### What CI runs
+
+On every pull request and push to `main`:
+
+| Job | Steps |
+|-----|-------|
+| **backend** | Python 3.12 · `pip install` reqs + dev reqs · `ruff check backend/app` · `pytest backend/tests` (postgres:16 service available) |
+| **frontend** | Node 22 · `npm ci` · `npx tsc --noEmit` · `npm run build` |
+
+### Upgrading dependencies
+
+**Backend:** create a fresh venv, install without pins, then run `pip list --format=freeze`
+and replace the versions in `backend/requirements.txt`. Run `pytest backend/tests` before committing.
+
+**Frontend:** run `npm install` in `frontend/`, capture the resolved versions from
+`package-lock.json`, update `package.json`, then verify with `npm ci` + `npm run build`.
