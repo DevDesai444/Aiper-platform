@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import uuid
 
+from app.services.permissions import effective_access, grant_access, revoke_access
 from sqlalchemy import text
 
-from app.services.permissions import effective_access, grant_access, revoke_access
 from tests.factories import (
     make_document,
     make_folder,

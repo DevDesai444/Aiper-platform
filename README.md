@@ -517,10 +517,13 @@ aiper/
 │   │       ├── 0001_baseline_schema.py   snapshot of the pre-tenancy models
 │   │       └── 0002_tenancy.py           the tree, grants, and the resolver
 │   ├── tests/                    pytest, against a real PostgreSQL
-│   │   ├── conftest.py           a throwaway migrated database per run
+│   │   ├── conftest.py           throwaway migrated database + auth fixtures
+│   │   ├── factories.py          builders for the tenancy tree
 │   │   ├── test_permissions.py   the resolver
 │   │   ├── test_routes.py        404-vs-403 on the wire
-│   │   └── test_migration_backfill.py  0001 → 0002 over legacy rows
+│   │   ├── test_migration_backfill.py  0001 → 0002 over legacy rows
+│   │   ├── test_auth.py          Supabase verification + legacy login
+│   │   └── test_health.py        /health without a database
 │   ├── skills/                   deepagents skills, one SKILL.md per directory
 │   │   ├── document_generation/
 │   │   ├── feature_comparison/
@@ -671,20 +674,23 @@ owner-level access as explicit grants.
 
 The suite is deliberately database-backed: the access resolver is a SQL
 function, so testing it against a stand-in would test something else. Each run
-creates its own database, migrates it with the real `alembic upgrade head`, and
-drops it afterwards.
+creates its own database, migrates it with the real `alembic upgrade head` —
+which puts the migrations themselves under test — and drops it afterwards.
+The schema comes from migrations rather than `create_all` for the same reason:
+`create_all` cannot create a SQL function, so it would silently leave the
+resolver out.
 
 ```bash
 docker compose up -d postgres
-cd backend
-pip install -r requirements.txt -r requirements-dev.txt
-pytest
+pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+pytest backend/tests
 ```
 
-`TEST_DATABASE_URL` selects the server and defaults to
-`postgresql+asyncpg://aiper_user:aiper_password@localhost:5432/aiper_db`, so on
-a standard compose stack `pytest` needs no environment at all. The database name
-in that DSN is only used to reach the server; the tests never touch it.
+pytest is configured in the root `pyproject.toml`, so run it from the repository
+root, as CI does. `TEST_DATABASE_URL` selects the server and defaults to
+`postgresql+asyncpg://aiper_user:aiper_password@localhost:5432/aiper_db`, so on a
+standard compose stack it needs no environment at all. The database name in that
+DSN is only used to reach the server; the tests never touch it.
 
 ---
 

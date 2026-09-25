@@ -16,9 +16,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
-
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 revision: str = '0001'
 down_revision: str | None = None
@@ -108,8 +107,15 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('document_id', 'email')
     )
-    op.create_index(op.f('ix_document_collaborators_document_id'), 'document_collaborators', ['document_id'], unique=False)
-    op.create_index(op.f('ix_document_collaborators_email'), 'document_collaborators', ['email'], unique=False)
+    op.create_index(
+        op.f('ix_document_collaborators_document_id'),
+        'document_collaborators',
+        ['document_id'],
+        unique=False,
+    )
+    op.create_index(
+        op.f('ix_document_collaborators_email'), 'document_collaborators', ['email'], unique=False
+    )
     op.create_table('file_assets',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('owner_id', sa.UUID(), nullable=False),
@@ -172,7 +178,9 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_file_assets_owner_id'), table_name='file_assets')
     op.drop_table('file_assets')
     op.drop_index(op.f('ix_document_collaborators_email'), table_name='document_collaborators')
-    op.drop_index(op.f('ix_document_collaborators_document_id'), table_name='document_collaborators')
+    op.drop_index(
+        op.f('ix_document_collaborators_document_id'), table_name='document_collaborators'
+    )
     op.drop_table('document_collaborators')
     op.drop_index(op.f('ix_chat_messages_session_id'), table_name='chat_messages')
     op.drop_table('chat_messages')

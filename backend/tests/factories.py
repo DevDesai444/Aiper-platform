@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.db.models import AccessGrant, Document, Folder, Organisation, Project, User
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def make_org(db: AsyncSession, slug: str) -> Organisation:

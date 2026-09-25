@@ -10,9 +10,6 @@ import asyncio
 import os
 from logging.config import fileConfig
 
-from sqlalchemy import pool
-from sqlalchemy.ext.asyncio import create_async_engine
-
 from alembic import context
 from app.config import settings
 
@@ -20,6 +17,8 @@ from app.config import settings
 # --autogenerate would see an empty schema and try to drop the world.
 from app.db import models  # noqa: F401
 from app.db.base import Base
+from sqlalchemy import pool
+from sqlalchemy.ext.asyncio import create_async_engine
 
 config = context.config
 
