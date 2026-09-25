@@ -118,6 +118,20 @@ class Settings(BaseSettings):
             )
 
 
+    # ingestion & upload safety (E5)
+    # Parsing runs in a killable child process (app.rag.sandbox); these are its
+    # hard bounds. The memory ceiling is enforced where the OS supports it
+    # (Linux); the wall-clock deadline is enforced everywhere.
+    parse_timeout_seconds: int = 120
+    parse_memory_mb: int = 1024
+    # Concurrent parse children; further uploads queue for a slot.
+    parse_concurrency: int = 2
+    # One file may index at most this many pages (slides count as pages).
+    max_pages_per_file: int = 800
+    # Uploads per user inside the sliding window (app.core.rate_limit).
+    upload_rate_limit: int = 30
+    upload_rate_window_seconds: int = 60
+
     # agent runtime (E6)
     # Wall-clock cap for one agent turn. On expiry the client stream ends with a
     # clean final activity event and a normal assistant message — never a hung
