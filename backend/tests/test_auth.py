@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.db.models import User
-from conftest import (
+from tests.conftest import (
     TEST_AUDIENCE,
     TEST_ISSUER,
     TEST_SUPABASE_SECRET,
