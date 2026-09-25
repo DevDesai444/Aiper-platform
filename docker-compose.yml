@@ -36,6 +36,12 @@ services:
       POSTGRES_HOST: postgres
       QDRANT_HOST: qdrant
       STORAGE_DIR: /data/uploads
+      # The API serves as the unprivileged aiper_app role (created by migration
+      # 0003, subject to row-level security); migrations and boot-time seeding
+      # use the privileged bootstrap role.
+      DATABASE_URL: postgresql+asyncpg://aiper_app:${AIPER_APP_DB_PASSWORD:-aiper_app_password}@postgres:5432/${POSTGRES_DB:-aiper_db}
+      ALEMBIC_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aiper_user}:${POSTGRES_PASSWORD:-aiper_password}@postgres:5432/${POSTGRES_DB:-aiper_db}
+      AIPER_APP_DB_PASSWORD: ${AIPER_APP_DB_PASSWORD:-aiper_app_password}
       # Dev/demo: keep the legacy self-issued login working until the frontend
       # moves to supabase-js. Remove (or set 0) and configure SUPABASE_URL +
       # SUPABASE_JWT_SECRET to switch to the production Supabase identity path.

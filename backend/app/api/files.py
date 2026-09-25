@@ -22,6 +22,7 @@ from app.core.deps import CurrentUser, DbSession
 from app.db.models import ChatSession, FileAsset
 from app.rag import store
 from app.rag.loaders import SUPPORTED_EXTENSIONS, load_pages
+from app.services import audit
 from app.services.permissions import require_access
 
 logger = logging.getLogger(__name__)
@@ -117,6 +118,15 @@ async def upload_file(
         asset.indexed = False
         asset.index_error = "Indexing failed; see server logs for details."
 
+    await audit.record_audit(
+        db,
+        org_id=user.org_id,
+        actor_id=user.id,
+        action=audit.FILE_UPLOAD,
+        subject_type="file",
+        subject_id=asset.id,
+        payload={"filename": asset.filename, "size_bytes": asset.size_bytes},
+    )
     await db.commit()
     await db.refresh(asset)
     return asset
@@ -139,6 +149,15 @@ async def delete_file(file_id: uuid.UUID, user: CurrentUser, db: DbSession) -> N
     await store.delete_file(org_id=asset.org_id, owner_id=user.id, file_id=asset.id)
     if asset.storage_path:
         await AsyncPath(asset.storage_path).unlink(missing_ok=True)
+    await audit.record_audit(
+        db,
+        org_id=user.org_id,
+        actor_id=user.id,
+        action=audit.FILE_DELETE,
+        subject_type="file",
+        subject_id=asset.id,
+        payload={"filename": asset.filename},
+    )
     await db.delete(asset)
     await db.commit()
 
