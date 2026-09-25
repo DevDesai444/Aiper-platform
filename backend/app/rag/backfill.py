@@ -15,6 +15,13 @@ re-running rewrites the same values — and safe while the app is serving.
 Points whose file row no longer exists are left untouched: with no org_id
 they stay unreachable, and the file delete path is the one that removes
 points. Run with --dry-run to see the row count without writing.
+
+Reads through the privileged connection (`ALEMBIC_DATABASE_URL`), not the
+app's request-scoped session: every table is FORCE ROW LEVEL SECURITY as of
+migration 0003, and this walks every organisation's files at once, which has
+no single identity to bind a normal session to — see `app.services.seed` for
+the same pattern applied to boot-time template seeding. Falls back to the
+plain session for a deployment that still runs a single privileged role.
 """
 
 from __future__ import annotations
@@ -24,7 +31,9 @@ import asyncio
 import logging
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.config import settings
 from app.db.base import SessionLocal
 from app.db.models import FileAsset
 from app.rag import store
@@ -36,14 +45,20 @@ _PROGRESS_EVERY = 100
 
 async def backfill(*, dry_run: bool = False) -> int:
     """Stamp every file's points with its row's tenancy. Returns rows seen."""
-    async with SessionLocal() as db:
-        rows = (
-            await db.execute(
-                select(FileAsset.id, FileAsset.org_id, FileAsset.project_id).order_by(
-                    FileAsset.created_at
-                )
-            )
-        ).all()
+    query = select(FileAsset.id, FileAsset.org_id, FileAsset.project_id).order_by(
+        FileAsset.created_at
+    )
+    if settings.alembic_database_url:
+        engine = create_async_engine(settings.alembic_database_url, future=True)
+        factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+        try:
+            async with factory() as db:
+                rows = (await db.execute(query)).all()
+        finally:
+            await engine.dispose()
+    else:
+        async with SessionLocal() as db:
+            rows = (await db.execute(query)).all()
 
     for count, (file_id, org_id, project_id) in enumerate(rows, start=1):
         if not dry_run:

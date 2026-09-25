@@ -24,6 +24,7 @@ from app.db.models import (
     RevisionDiff,
     User,
 )
+from app.rag.corpus import reindex_document
 from app.services import audit
 from app.services.diff import diff_text
 from app.services.documents import empty_document, markdown_to_tiptap, tiptap_to_text
@@ -120,7 +121,9 @@ async def _commit(
     author: User,
     source: str,
 ) -> Revision:
-    """Snapshot the content, diff it against the head, append a revision."""
+    """Snapshot the content, diff it against the head, append a revision, and
+    reindex — every path that changes what a document says runs through
+    here, so this is the one place retrieval needs to stay in step with."""
     new_text = tiptap_to_text(content_json)
     delta = diff_text(document.content_text or "", new_text)
 
@@ -153,6 +156,9 @@ async def _commit(
     document.content_text = new_text
     document.revision_count = revision.revision_number
     document.head_revision_id = revision.id
+
+    await reindex_document(document)
+
     return revision
 
 
