@@ -287,3 +287,41 @@ class RevisionVerifyOut(BaseModel):
     ok: bool
     checked: int
     first_broken_revision: uuid.UUID | None = None
+
+
+# ─────────────────────────────── comments (E6) ────────────────────────────────
+
+
+class CommentCreate(BaseModel):
+    """Client posts a new comment. ``mark_id`` is generated on the client
+    (uuid in practice) and echoed back on the mark applied to the editor."""
+
+    mark_id: str = Field(min_length=1, max_length=64)
+    body: str = Field(min_length=1, max_length=8000)
+    quoted_text: str = Field(default="", max_length=4000)
+
+
+class CommentOut(ORMModel):
+    id: uuid.UUID
+    document_id: uuid.UUID
+    mark_id: str
+    body: str
+    quoted_text: str
+    author_id: uuid.UUID | None
+    author_email: str
+    author_name: str
+    resolved_at: datetime | None
+    created_at: datetime
+
+
+class CommentList(BaseModel):
+    """Envelope for a document's comment list. v1 shape preserved so the
+    frontend port can reuse its serialiser verbatim."""
+
+    items: list[CommentOut] = Field(default_factory=list)
+
+
+class CommentResolveResponse(BaseModel):
+    """The updated comments in a thread after a resolve. v1 shape preserved."""
+
+    comments: list[CommentOut] = Field(default_factory=list)

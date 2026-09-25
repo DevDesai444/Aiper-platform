@@ -6,6 +6,7 @@ import type {
   ChatSessionDetail,
   Collaborator,
   Diff,
+  DocumentComment,
   DocumentDetail,
   DocumentSummary,
   DocumentTemplate,
@@ -180,6 +181,32 @@ export const api = {
     request<void>(`/api/v1/documents/${documentId}/collaborators/${collaboratorId}`, {
       method: "DELETE",
     }),
+
+  /* comments (E6). Envelope shapes: list -> {items: [...]}, resolve ->
+     {comments: [...]}. See backend `app/api/documents.py::comments` for the
+     access-model. */
+  listComments: (documentId: string) =>
+    request<{ items: DocumentComment[] }>(
+      `/api/v1/documents/${documentId}/comments`,
+    ).then((r) => r.items),
+  createComment: (
+    documentId: string,
+    body: { mark_id: string; body: string; quoted_text: string },
+  ) =>
+    request<DocumentComment>(`/api/v1/documents/${documentId}/comments`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  resolveCommentThread: (documentId: string, markId: string) =>
+    request<{ comments: DocumentComment[] }>(
+      `/api/v1/documents/${documentId}/comments/${encodeURIComponent(markId)}/resolve`,
+      { method: "POST" },
+    ).then((r) => r.comments),
+  deleteCommentThread: (documentId: string, markId: string) =>
+    request<void>(
+      `/api/v1/documents/${documentId}/comments/${encodeURIComponent(markId)}`,
+      { method: "DELETE" },
+    ),
 };
 
 export interface StreamRequest {

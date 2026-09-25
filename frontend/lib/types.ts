@@ -191,3 +191,19 @@ export interface Health {
   mock: boolean;
   azure_configured: boolean;
 }
+
+/* ── Comments (E6) ───────────────────────────────────────────────────── */
+
+/** One comment row. A thread is the set of rows sharing (documentId, markId). */
+export interface DocumentComment {
+  id: string;
+  document_id: string;
+  mark_id: string;
+  body: string;
+  quoted_text: string;
+  author_id: string | null;
+  author_email: string;
+  author_name: string;
+  resolved_at: string | null;
+  created_at: string;
+}

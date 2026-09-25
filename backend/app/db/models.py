@@ -416,3 +416,51 @@ class DocumentCollaborator(Base, TimestampMixin):
     invite_status: Mapped[str] = mapped_column(String(16), default="pending")  # pending | accepted
 
     document: Mapped[Document] = relationship(back_populates="collaborators")
+
+
+class DocumentComment(Base):
+    """A comment posted against a TipTap ``comment`` mark in a document.
+
+    The highlight (the ``comment`` mark on a range of text) lives in
+    ``documents.content_json`` and gets persisted alongside the document at
+    commit time. The BODY lives here — split so that adding, resolving and
+    deleting a thread never has to touch the document itself or race the next
+    commit.
+
+    A thread is the set of rows that share ``(document_id, mark_id)``. See
+    ``0005_document_comments.py`` for the schema, ``commentMark.ts`` for the
+    mark itself, and ``app/api/documents.py::comments`` for the routes.
+    """
+
+    __tablename__ = "document_comments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organisations.id", ondelete="CASCADE"), index=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    # Client-generated id, tied to the ``markId`` attribute of the TipTap mark
+    # on the same range of text. Not a UUID column so we do not force the
+    # client to a particular id shape.
+    mark_id: Mapped[str] = mapped_column(String(64), index=True)
+    body: Mapped[str] = mapped_column(Text)
+    quoted_text: Mapped[str] = mapped_column(Text, default="")
+    author_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    # Denormalised author display fields, matching Revision — immune to later
+    # renames or account deletion.
+    author_email: Mapped[str] = mapped_column(String(320), default="")
+    author_name: Mapped[str] = mapped_column(String(160), default="")
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    resolved_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
