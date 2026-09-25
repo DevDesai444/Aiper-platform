@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Organisation
@@ -32,17 +33,20 @@ def slugify(name: str) -> str:
 
 
 async def ensure_organisation(db: AsyncSession, name: str) -> Organisation:
-    """Find the organisation for this name, creating it the first time."""
+    """Find the organisation for this name, creating it the first time.
+
+    Written as an upsert because this now sits on the sign-in path: the first
+    two concurrent logins would otherwise race on the unique slug, and a failed
+    INSERT poisons the surrounding transaction rather than being recoverable.
+    """
     label = name.strip() or DEFAULT_ORG_NAME
     slug = slugify(name)
 
-    existing = (
+    await db.execute(
+        pg_insert(Organisation)
+        .values(name=label, slug=slug)
+        .on_conflict_do_nothing(index_elements=["slug"])
+    )
+    return (
         await db.execute(select(Organisation).where(Organisation.slug == slug))
-    ).scalar_one_or_none()
-    if existing is not None:
-        return existing
-
-    org = Organisation(name=label, slug=slug)
-    db.add(org)
-    await db.flush()
-    return org
+    ).scalar_one()
