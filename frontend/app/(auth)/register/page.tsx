@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -11,6 +12,7 @@ import { useAuth } from "@/lib/auth";
 
 export default function RegisterPage() {
   const { signUp } = useAuth();
+  const router = useRouter();
   const [form, setForm] = useState({
     full_name: "",
     organisation: "",
@@ -32,7 +34,13 @@ export default function RegisterPage() {
     }
     setPending(true);
     try {
-      await signUp({ ...form, email: form.email.trim() });
+      const { needsEmailConfirmation } = await signUp({ ...form, email: form.email.trim() });
+      if (needsEmailConfirmation) {
+        toast.success("Check your email", {
+          description: "Confirm your address, then sign in to continue.",
+        });
+        router.push("/login");
+      }
     } catch (error) {
       toast.error("Could not create the account", {
         description: error instanceof Error ? error.message : "Unexpected error",

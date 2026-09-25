@@ -1,3 +1,5 @@
+import { getSupabaseAccessToken, getSupabaseClient, isSupabaseEnabled } from "@/lib/supabase";
+import { chooseBearerToken } from "@/lib/supabase-helpers";
 import type {
   AuthResponse,
   ChatSession,
@@ -18,6 +20,7 @@ export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000
 
 const TOKEN_KEY = "aiper.token";
 
+/** The legacy self-issued token, held in localStorage. Unused on the Supabase path. */
 export function getToken() {
   if (typeof window === "undefined") return null;
   return window.localStorage.getItem(TOKEN_KEY);
@@ -27,6 +30,20 @@ export function setToken(token: string | null) {
   if (typeof window === "undefined") return;
   if (token) window.localStorage.setItem(TOKEN_KEY, token);
   else window.localStorage.removeItem(TOKEN_KEY);
+}
+
+/**
+ * The Bearer token for outgoing requests: the Supabase access token when Supabase
+ * owns identity, otherwise the legacy token. Async because fetching a fresh (and
+ * possibly refreshed) Supabase session is async.
+ */
+export async function resolveBearerToken(): Promise<string | null> {
+  const supabaseConfigured = isSupabaseEnabled();
+  return chooseBearerToken({
+    supabaseConfigured,
+    supabaseAccessToken: supabaseConfigured ? await getSupabaseAccessToken() : null,
+    legacyToken: supabaseConfigured ? null : getToken(),
+  });
 }
 
 export class ApiError extends Error {
@@ -40,13 +57,16 @@ export class ApiError extends Error {
 /** A 401 anywhere clears the session and sends the user back to /login. */
 function onUnauthorised() {
   setToken(null);
+  // On the Supabase path, also drop the (now-rejected) session so the app doesn't
+  // keep retrying with a dead token. Fire-and-forget; the auth listener reacts.
+  if (isSupabaseEnabled()) void getSupabaseClient()?.auth.signOut();
   if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
     window.location.href = "/login";
   }
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const token = getToken();
+  const token = await resolveBearerToken();
   const headers = new Headers(init.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
   if (init.body && !(init.body instanceof FormData)) {
@@ -173,7 +193,7 @@ export async function streamChat(
   onEvent: (event: unknown) => void,
   signal?: AbortSignal,
 ) {
-  const token = getToken();
+  const token = await resolveBearerToken();
   const response = await fetch(`${API_URL}/api/v1/chat/stream`, {
     method: "POST",
     headers: {
