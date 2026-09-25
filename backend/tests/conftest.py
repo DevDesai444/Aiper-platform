@@ -33,6 +33,14 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+# Set safe env BEFORE any app import so the cached get_settings() picks them up
+# (from E10's Phase 0 conftest; merged at integration).
+os.environ.setdefault("AIPER_DEV_MODE", "1")
+os.environ.setdefault(
+    "DATABASE_URL",
+    "postgresql+asyncpg://aiper_user:aiper_password@localhost:5432/aiper_db",
+)
+
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
     "postgresql+asyncpg://aiper_user:aiper_password@localhost:5432/aiper_db",

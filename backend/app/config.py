@@ -5,11 +5,18 @@ from functools import lru_cache
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_DEFAULT_JWT_SECRET = "super_secret_jwt_key_change_me"
+_DEFAULT_DB_PASSWORD = "aiper_password"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     app_name: str = "aiper"
+
+    # Development mode — set AIPER_DEV_MODE=1 to bypass startup secret checks.
+    # Never enable this in production.
+    aiper_dev_mode: bool = False
 
     # Azure OpenAI
     azure_openai_api_key: str = ""
@@ -22,7 +29,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://aiper_user:aiper_password@postgres:5432/aiper_db"
 
     # Security
-    jwt_secret: str = "super_secret_jwt_key_change_me"
+    jwt_secret: str = _DEFAULT_JWT_SECRET
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 60 * 24 * 7
 
@@ -88,6 +95,27 @@ class Settings(BaseSettings):
     def auth_configured(self) -> bool:
         """Startup fail-closed guard: at least one auth mode must be enabled."""
         return self.supabase_configured or self.auth_legacy_login_enabled
+    def check_production_secrets(self) -> None:
+        """Raise RuntimeError if unsafe defaults are present in production mode."""
+        if self.aiper_dev_mode:
+            return
+        errors: list[str] = []
+        if not self.jwt_secret or self.jwt_secret == _DEFAULT_JWT_SECRET:
+            errors.append(
+                "JWT_SECRET is empty or still the default placeholder. "
+                "Set a strong random value via the JWT_SECRET environment variable."
+            )
+        if _DEFAULT_DB_PASSWORD in self.database_url:
+            errors.append(
+                "DATABASE_URL still contains the default password 'aiper_password'. "
+                "Set a strong password via the DATABASE_URL environment variable."
+            )
+        if errors:
+            bullet_list = "\n  - ".join(errors)
+            raise RuntimeError(
+                f"Refusing to start: unsafe default configuration detected.\n  - {bullet_list}\n"
+                "Set AIPER_DEV_MODE=1 to bypass these checks during local development."
+            )
 
 
 @lru_cache

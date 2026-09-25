@@ -1,38 +1,39 @@
-# Unpinned on purpose: every image build resolves the latest release of each.
+# Pinned versions — resolved 2024-09 with Python 3.12.
+# To upgrade: create a fresh venv, install without pins, run `pip list --format=freeze`,
+# update the versions here, then run the test suite before committing.
 
 # API
-fastapi
-uvicorn[standard]
-python-multipart
-pydantic
-pydantic-settings
-email-validator
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+python-multipart==0.0.32
+pydantic==2.13.5
+pydantic-settings==2.15.0
+email-validator==2.3.0
 
 # Persistence
-sqlalchemy[asyncio]
-asyncpg
-greenlet
+sqlalchemy[asyncio]==2.1.0
+asyncpg==0.31.0
+greenlet==3.5.6
 
 # Auth
-bcrypt
-PyJWT
+bcrypt==5.0.0
+PyJWT==2.15.0
 
 # Agent runtime
-deepagents
-langchain
-langchain-core
-langgraph
-langchain-openai
+deepagents==0.7.19
+langchain==1.4.2
+langchain-core==1.6.5
+langgraph==1.2.12
+langchain-openai==1.6.6
 
 # Retrieval
-qdrant-client
+qdrant-client==1.19.1
 
 # Document parsing (page-aware)
-pypdf
-python-pptx
-python-docx
+pypdf==6.19.0
+python-pptx==1.0.2
+python-docx==1.2.0
 
 # auth (E1)
 # Supabase JWT verification needs RS256/ES256 support -> the [crypto] extra
-# (pulls in `cryptography`). Supersedes the plain PyJWT pin above.
-PyJWT[crypto]
+PyJWT[crypto]==2.15.0

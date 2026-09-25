@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator
 
@@ -20,6 +21,8 @@ from app.config import settings
 from app.core.deps import CurrentUser, DbSession
 from app.db.base import SessionLocal
 from app.db.models import ChatMessage, ChatSession, DocumentTemplate, FileAsset, User
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -130,7 +133,8 @@ async def _turn(
                 activity.append(event)
             yield _sse(event)
     except Exception as exc:  # noqa: BLE001 - surfaced to the client as a feed row
-        event = {"type": "error", "message": str(exc)[:500]}
+        logger.error("Agent turn failed for session %s: %s", session_id, exc, exc_info=True)
+        event = {"type": "error", "message": "An error occurred while processing your request."}
         activity.append(event)
         yield _sse(event)
 

@@ -1,36 +1,47 @@
+import Image from "next/image";
+
 import { cn } from "@/lib/utils";
 
 /**
- * The mark: an orbital path around a solid body. Flat, two-tone, no glow.
+ * The mark: the four-point star from the Aiper Space brand, in brand blue.
+ * Used where a compact square mark is needed (chat avatars, editor chrome).
  */
 export function Logo({ className }: { className?: string }) {
   return (
     <svg
       viewBox="0 0 24 24"
-      fill="none"
       aria-hidden
-      className={cn("size-[18px] text-foreground", className)}
+      className={cn("size-[18px] text-[#2447f5]", className)}
     >
-      <circle cx="12" cy="12" r="3.4" fill="currentColor" />
-      <ellipse
-        cx="12"
-        cy="12"
-        rx="10"
-        ry="5.2"
-        transform="rotate(-28 12 12)"
-        stroke="currentColor"
-        strokeOpacity="0.42"
-        strokeWidth="1.4"
+      <path
+        d="M12 2c1.05 5.9 3.35 8.3 10 10-6.65 1.7-8.95 4.1-10 10-1.05-5.9-3.35-8.3-10-10 6.65-1.7 8.95-4.1 10-10Z"
+        fill="currentColor"
       />
     </svg>
   );
 }
 
+/**
+ * The brand wordmark: the original Aiper Space logo. The source PNG has a
+ * baked-in white background, so it sits on a white chip that reads correctly
+ * on both themes.
+ */
 export function Wordmark({ className }: { className?: string }) {
   return (
-    <span className={cn("flex items-center gap-2", className)}>
-      <Logo />
-      <span className="text-[0.9375rem] font-semibold tracking-[-0.02em]">aiper</span>
+    <span
+      className={cn(
+        "inline-flex items-center rounded-lg bg-white px-2.5 py-1.5 shadow-sm",
+        className,
+      )}
+    >
+      <Image
+        src="/aiper-logo.png"
+        alt="Aiper Space"
+        width={500}
+        height={500}
+        priority
+        className="h-9 w-auto"
+      />
     </span>
   );
 }

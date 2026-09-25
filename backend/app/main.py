@@ -1,9 +1,12 @@
 """Application entrypoint."""
 
+import logging
+import traceback
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.router import api_router
 from app.config import settings
@@ -12,6 +15,8 @@ from app.db.base import init_db
 from app.rag.store import ensure_collection
 from app.services.seed import seed_templates
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -19,6 +24,7 @@ async def lifespan(app: FastAPI):
     # (Supabase for production, or the legacy dev/demo login flag).
     ensure_auth_configured()
 
+    settings.check_production_secrets()
     await init_db()
     await seed_templates()
     try:
@@ -44,6 +50,20 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.error(
+        "Unhandled exception on %s %s: %s",
+        request.method,
+        request.url.path,
+        traceback.format_exc(),
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
 
 
 @app.get("/health", tags=["meta"])

@@ -1,10 +1,5 @@
-# Test / development dependencies (not installed into the production image).
-#   pip install -r requirements.txt -r requirements-dev.txt
-#
-# Kept separate from requirements.txt so the runtime image stays lean. E10 owns
-# CI pinning; align these there if versions need locking.
--r requirements.txt
-
-pytest
-pytest-asyncio
-httpx
+# Dev/test dependencies — not installed in production images.
+ruff==0.16.9
+pytest==9.1.1
+pytest-asyncio==1.4.0
+httpx==0.28.1

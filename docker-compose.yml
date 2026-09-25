@@ -2,7 +2,7 @@ name: aiper
 
 services:
   postgres:
-    image: postgres:alpine
+    image: postgres:16-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-aiper_user}
@@ -40,6 +40,7 @@ services:
       # moves to supabase-js. Remove (or set 0) and configure SUPABASE_URL +
       # SUPABASE_JWT_SECRET to switch to the production Supabase identity path.
       AUTH_LEGACY_LOGIN_ENABLED: "1"
+      AIPER_DEV_MODE: "1"
     ports:
       - "8000:8000"
     volumes:
