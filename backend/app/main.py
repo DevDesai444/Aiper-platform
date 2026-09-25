@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.router import api_router
 from app.config import settings
+from app.core.body_limit import BodySizeLimitMiddleware
 from app.core.startup import ensure_auth_configured
 from app.db.base import verify_schema
 from app.rag.store import ensure_collection
@@ -42,6 +43,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Ceiling on any request body: the largest legal upload plus multipart
+# framing. Added before CORS so CORS wraps it and a 413 still carries the
+# headers a browser needs to read it.
+app.add_middleware(
+    BodySizeLimitMiddleware, max_bytes=(settings.max_upload_mb + 1) * 1024 * 1024
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
