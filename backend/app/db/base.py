@@ -1,6 +1,7 @@
 """Async engine, session factory and the schema contract."""
 
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 from sqlalchemy import text
 from sqlalchemy.exc import DatabaseError
@@ -44,3 +45,25 @@ async def verify_schema() -> None:
 
     if revision is None:
         raise unmigrated
+
+    # A stamp alone is not enough: a database stamped at an older revision has
+    # tables the mappers no longer match, which surfaces as 500s at request
+    # time instead of one legible refusal here.
+    head = _migration_head()
+    if head is not None and revision != head:
+        raise RuntimeError(
+            f"The database is at Alembic revision {revision!r} but the code "
+            f"expects {head!r}. Run `alembic upgrade head` from backend/ "
+            "before starting the API."
+        )
+
+
+def _migration_head() -> str | None:
+    """The newest revision shipped with this code, or None off a checkout/image
+    that carries no alembic/ directory (tests import this module without one)."""
+    versions = Path(__file__).resolve().parents[2] / "alembic"
+    if not versions.is_dir():
+        return None
+    from alembic.script import ScriptDirectory
+
+    return ScriptDirectory(str(versions)).get_current_head()
