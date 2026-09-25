@@ -1,0 +1,24 @@
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+.next/
+npm-debug.log*
+
+# Env & secrets
+.env
+.env.local
+*.env.backup
+
+# Editors
+.idea/
+.vscode/
