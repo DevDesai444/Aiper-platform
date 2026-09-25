@@ -112,6 +112,7 @@ class FileOut(ORMModel):
     index_error: str | None
     comparison_role: str
     session_id: uuid.UUID | None
+    project_id: uuid.UUID | None
     created_at: datetime
 
 
@@ -263,3 +264,22 @@ class DocumentDetail(DocumentOut):
 
 class TitleUpdate(BaseModel):
     title: str = Field(max_length=300)
+
+
+# ─────────────────────────────── audit / integrity ──────────────────────────
+
+
+class AuditVerifyOut(BaseModel):
+    """The verdict of walking one organisation's audit hash chain."""
+
+    ok: bool
+    checked: int
+    first_broken_id: int | None = None
+
+
+class RevisionVerifyOut(BaseModel):
+    """The verdict of walking one document's revision hash chain."""
+
+    ok: bool
+    checked: int
+    first_broken_revision: uuid.UUID | None = None

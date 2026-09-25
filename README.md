@@ -229,7 +229,7 @@ step is deliberately stubbed.
 │ PostgreSQL           │        │ Qdrant                   │
 │ users, documents,    │        │ one point == one page    │
 │ revisions, diffs,    │        │ payload-filtered by      │
-│ chat, file metadata  │        │ owner_id and file_id     │
+│ chat, file metadata  │        │ org, project, owner, file│
 └──────────────────────┘        └──────────────────────────┘
 ```
 
@@ -275,10 +275,17 @@ Indexing runs **inline**, not in a background queue, so the chat turn that
 follows an upload can rely on the pages being searchable. Failures are recorded
 on the asset (`index_error`) and surfaced in the Vault rather than raised.
 
-Every Qdrant point carries `owner_id`, `file_id`, `session_id`,
-`comparison_role` and `page` in its payload, all indexed. Every query is built
-through `_filter()`, which always pins `owner_id` — a tool physically cannot
-reach another user's pages.
+Every Qdrant point carries `org_id`, `project_id`, `owner_id`, `file_id`,
+`session_id`, `comparison_role` and `page` in its payload, all indexed. Every
+query is built through `_filter()`, which always pins the caller's
+`RetrievalScope` (`app/rag/scope.py`): the organisation as an outer
+must-condition, and inside it only pages the caller owns or pages in a project
+`aiper_effective_access` admits them to. The scope is recomputed from the
+database on every retrieval — revoking a grant is effective on the next query,
+even mid-turn — and every hit is re-verified against it before being returned.
+A point without tenancy payload (for example one indexed before the migration)
+matches nothing until `python -m app.rag.backfill` stamps it: fail closed, not
+open. A tool physically cannot reach pages its caller cannot read.
 
 ### 3. An agent turn, end to end
 
@@ -548,7 +555,9 @@ aiper/
 │       │   └── runtime.py        astream_events → the UI event feed
 │       ├── rag/
 │       │   ├── loaders.py        one page = one chunk, per format
-│       │   └── store.py          Qdrant; every query pinned to owner_id
+│       │   ├── scope.py          RetrievalScope: org + resolver-admitted projects
+│       │   ├── backfill.py       stamp tenancy onto pre-migration points
+│       │   └── store.py          Qdrant; every query pinned to a RetrievalScope
 │       ├── services/
 │       │   ├── permissions.py    the resolver's Python face: 404 vs 403
 │       │   ├── tree.py           default project, same-project folder invariant

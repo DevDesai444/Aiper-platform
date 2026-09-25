@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import uuid
 
-from app.db.models import AccessGrant, Document, Folder, Organisation, Project, User
+from app.db.models import (
+    AccessGrant,
+    Document,
+    FileAsset,
+    Folder,
+    Organisation,
+    Project,
+    User,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -70,6 +78,26 @@ async def make_document(
     db.add(document)
     await db.flush()
     return document
+
+
+async def make_file_asset(
+    db: AsyncSession,
+    owner: User,
+    filename: str = "source.pdf",
+    project: Project | None = None,
+) -> FileAsset:
+    """An uploaded file row: the owner's org, optionally filed in a project."""
+    asset = FileAsset(
+        owner_id=owner.id,
+        org_id=owner.org_id,
+        project_id=project.id if project else None,
+        filename=filename,
+        extension=".pdf",
+        indexed=True,
+    )
+    db.add(asset)
+    await db.flush()
+    return asset
 
 
 async def make_grant(

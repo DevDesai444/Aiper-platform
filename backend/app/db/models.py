@@ -7,14 +7,17 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
+    Identity,
     Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ENUM, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -93,9 +96,12 @@ class Folder(Base, TimestampMixin):
     project_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"), index=True
     )
-    # That a parent belongs to the same project as its child is a service-layer
-    # invariant (app.services.tree); the resolver additionally refuses to walk
-    # out of the project, so a bad parent cannot carry access across the tree.
+    # In the database this is half of the composite key (parent_folder_id,
+    # project_id) → folders (id, project_id) — migration 0003 — so a parent
+    # from another project is unwritable, and the resolver refuses to walk out
+    # of the project besides. The mapper keeps the single-column form: the
+    # composite self-join would have the relationship writing project_id along
+    # two paths, and the constraint is the database's job, not the ORM's.
     parent_folder_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("folders.id", ondelete="CASCADE"), nullable=True, index=True
     )
@@ -103,7 +109,7 @@ class Folder(Base, TimestampMixin):
 
     project: Mapped[Project] = relationship(back_populates="folders")
     children: Mapped[list[Folder]] = relationship(
-        back_populates="parent", cascade="all, delete-orphan"
+        back_populates="parent", cascade="all, delete-orphan", passive_deletes=True
     )
     parent: Mapped[Folder | None] = relationship(
         back_populates="children", remote_side="Folder.id"
@@ -231,7 +237,10 @@ class ChatSession(Base, TimestampMixin):
     mode: Mapped[str] = mapped_column(String(32), default="document_generation")
 
     messages: Mapped[list[ChatMessage]] = relationship(
-        back_populates="session", cascade="all, delete-orphan", order_by="ChatMessage.created_at"
+        back_populates="session",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ChatMessage.created_at",
     )
 
 
@@ -271,7 +280,10 @@ class Document(Base, TimestampMixin):
         ForeignKey("projects.id", ondelete="CASCADE"), index=True
     )
     # NULL means the project root. A deleted folder leaves its documents there
-    # rather than destroying them.
+    # rather than destroying them. In the database this is the composite key
+    # (folder_id, project_id) → folders (id, project_id) — migration 0003 —
+    # so a folder from another project is unwritable; the mapper keeps the
+    # single-column form (see Folder.parent_folder_id).
     folder_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("folders.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -281,13 +293,20 @@ class Document(Base, TimestampMixin):
     revision_count: Mapped[int] = mapped_column(Integer, default=0)
     head_revision_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
+    # passive_deletes="all": removal of history rides the database's own
+    # ON DELETE CASCADE, full stop. The ORM must never emit DELETEs for
+    # revisions — even ones it has loaded — because the runtime role
+    # deliberately holds no DELETE on history tables (they are append-only),
+    # while referential cascades are internal to Postgres and exempt from both
+    # privileges and row security. delete-orphan is gone with it: history is
+    # never pruned by removing it from a list.
     revisions: Mapped[list[Revision]] = relationship(
         back_populates="document",
-        cascade="all, delete-orphan",
+        passive_deletes="all",
         order_by="Revision.revision_number.desc()",
     )
     collaborators: Mapped[list[DocumentCollaborator]] = relationship(
-        back_populates="document", cascade="all, delete-orphan"
+        back_populates="document", cascade="all, delete-orphan", passive_deletes=True
     )
 
 
@@ -313,10 +332,17 @@ class Revision(Base):
     content_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     content_text: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    # Filled by the revisions_chain trigger (migration 0004) on every insert:
+    # content_hash = sha256 of the content, chain_hash links to the parent's.
+    # Anything set here is overwritten; a later edit to either row is rejected.
+    content_hash: Mapped[str] = mapped_column(Text, default="", server_default="")
+    chain_hash: Mapped[str] = mapped_column(Text, default="", server_default="")
 
     document: Mapped[Document] = relationship(back_populates="revisions")
     diff: Mapped[RevisionDiff | None] = relationship(
-        back_populates="revision", cascade="all, delete-orphan", uselist=False
+        back_populates="revision",
+        passive_deletes="all",
+        uselist=False,
     )
 
 
@@ -335,6 +361,41 @@ class RevisionDiff(Base):
     modifications: Mapped[int] = mapped_column(Integer, default=0)
 
     revision: Mapped[Revision] = relationship(back_populates="diff")
+
+
+class AuditLog(Base):
+    """One append-only, hash-chained event per security-relevant action.
+
+    Written through ``app.services.audit``; hashes are computed by the
+    audit_log_chain trigger and every UPDATE/DELETE raises (migration 0004).
+    Deliberately without foreign keys: evidence must outlive its subject, and
+    no cascade may rewrite or remove it.
+    """
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=True), primary_key=True
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=False)
+    # The chain position within the organisation, assigned by the trigger
+    # under its advisory lock — id order and chain order can differ under
+    # concurrency, seq order cannot.
+    seq: Mapped[int] = mapped_column(BigInteger)
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    action: Mapped[str] = mapped_column(Text)
+    subject_type: Mapped[str] = mapped_column(Text)
+    subject_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, default=dict, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=text("now()")
+    )
+    prev_hash: Mapped[str] = mapped_column(Text)
+    row_hash: Mapped[str] = mapped_column(Text)
+
+    __table_args__ = (UniqueConstraint("org_id", "seq", name="uq_audit_log_org_seq"),)
 
 
 class DocumentCollaborator(Base, TimestampMixin):

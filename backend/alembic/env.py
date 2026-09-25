@@ -27,11 +27,48 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+# Constraints migration 0003 manages beyond what the mappers express: the
+# composite foreign keys that pin a folder reference to its project need
+# (id, project_id) reference pairs, which the ORM relationships deliberately do
+# not model (a composite self-join would write project_id along two paths).
+# Autogenerate must neither drop the composite constraints nor recreate the
+# single-column ones the mappers still carry for the join conditions.
+_DB_MANAGED_CONSTRAINTS = {
+    "fk_documents_folder_project",
+    "fk_folders_parent_project",
+    "uq_folders_id_project",
+}
+_MAPPER_ONLY_FKS = {
+    ("documents", ("folder_id",)),
+    ("folders", ("parent_folder_id",)),
+}
+
+
+def _include_object(obj, name, type_, reflected, compare_to) -> bool:
+    if type_ in {"foreign_key_constraint", "unique_constraint"}:
+        if reflected and name in _DB_MANAGED_CONSTRAINTS:
+            return False
+        if not reflected and type_ == "foreign_key_constraint":
+            columns = tuple(col.name for col in obj.columns)
+            if (obj.table.name, columns) in _MAPPER_ONLY_FKS:
+                return False
+    return True
+
 
 def _database_url() -> str:
-    """-x db_url=... wins, then $ALEMBIC_DATABASE_URL, then app settings."""
+    """-x db_url=... wins, then $ALEMBIC_DATABASE_URL, then app settings.
+
+    settings.database_url is the last resort: since migration 0003 it names the
+    unprivileged runtime role, which cannot run DDL — real deployments (and the
+    container entrypoint) provide ALEMBIC_DATABASE_URL.
+    """
     from_cli = (context.get_x_argument(as_dictionary=True) or {}).get("db_url")
-    return from_cli or os.getenv("ALEMBIC_DATABASE_URL") or settings.database_url
+    return (
+        from_cli
+        or os.getenv("ALEMBIC_DATABASE_URL")
+        or settings.alembic_database_url
+        or settings.database_url
+    )
 
 
 def run_migrations_offline() -> None:
@@ -42,6 +79,7 @@ def run_migrations_offline() -> None:
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
         compare_server_default=True,
+        include_object=_include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -53,6 +91,7 @@ def _run_migrations(connection) -> None:
         target_metadata=target_metadata,
         compare_type=True,
         compare_server_default=True,
+        include_object=_include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
