@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.router import api_router
 from app.config import settings
+from app.core.startup import ensure_auth_configured
 from app.db.base import init_db
 from app.rag.store import ensure_collection
 from app.services.seed import seed_templates
@@ -19,6 +20,10 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Fail closed: refuse to serve unless an authentication mode is configured
+    # (Supabase for production, or the legacy dev/demo login flag).
+    ensure_auth_configured()
+
     settings.check_production_secrets()
     await init_db()
     await seed_templates()

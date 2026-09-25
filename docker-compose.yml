@@ -36,6 +36,10 @@ services:
       POSTGRES_HOST: postgres
       QDRANT_HOST: qdrant
       STORAGE_DIR: /data/uploads
+      # Dev/demo: keep the legacy self-issued login working until the frontend
+      # moves to supabase-js. Remove (or set 0) and configure SUPABASE_URL +
+      # SUPABASE_JWT_SECRET to switch to the production Supabase identity path.
+      AUTH_LEGACY_LOGIN_ENABLED: "1"
       AIPER_DEV_MODE: "1"
     ports:
       - "8000:8000"
