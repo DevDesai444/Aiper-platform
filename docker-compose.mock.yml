@@ -11,6 +11,7 @@ services:
     environment:
       CORS_ORIGINS: http://localhost:3000
       STORAGE_DIR: /data/uploads
+      AIPER_DEV_MODE: "1"
     ports:
       - "8000:8000"
     volumes:
