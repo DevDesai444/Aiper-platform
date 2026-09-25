@@ -44,6 +44,24 @@ function Citation({ label }: { label: string }) {
   );
 }
 
+/* ── link safety ──────────────────────────────────────────────────────── */
+
+const ALLOWED_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
+
+/**
+ * Returns the href only if its protocol is in the allow-list; otherwise
+ * returns undefined so the anchor renders without an href (inert but visible).
+ */
+function safeHref(raw: string): string | undefined {
+  try {
+    const url = new URL(raw);
+    return ALLOWED_PROTOCOLS.has(url.protocol) ? raw : undefined;
+  } catch {
+    // Relative paths have no protocol — treat as inert.
+    return undefined;
+  }
+}
+
 /* ── inline ───────────────────────────────────────────────────────────── */
 
 // Citation, bold, italic, inline code, link.
@@ -67,9 +85,10 @@ function inline(text: string, keyPrefix: string): ReactNode[] {
     else if (match[3]) nodes.push(<code key={key}>{token.slice(1, -1)}</code>);
     else if (match[4]) nodes.push(<em key={key}>{token.slice(1, -1)}</em>);
     else if (match[5]) {
-      const [, label, href] = token.match(/\[([^\]]+)\]\(([^)\s]+)\)/) ?? [];
+      const [, label, rawHref] = token.match(/\[([^\]]+)\]\(([^)\s]+)\)/) ?? [];
+      const href = safeHref(rawHref);
       nodes.push(
-        <a key={key} href={href} target="_blank" rel="noreferrer noopener">
+        <a key={key} href={href} target="_blank" rel="noopener noreferrer">
           {label}
         </a>,
       );
