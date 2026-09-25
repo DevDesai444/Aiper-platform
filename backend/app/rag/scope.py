@@ -18,10 +18,12 @@ call inside an agent turn that is already running.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, bindparam, or_, select, text
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -100,3 +102,40 @@ def accessible_files_clause(
             ),
         ),
     )
+
+
+# ════════════════════════════ document corpus (E5) ═════════════════════════
+
+_ADMITTED_DOCUMENTS = text(
+    """
+    SELECT doc_id
+      FROM unnest(:document_ids) AS doc_id
+     WHERE aiper_effective_access(:user_id, CAST('document' AS aiper_subject), doc_id)
+           IS NOT NULL
+    """
+).bindparams(
+    bindparam("document_ids", type_=ARRAY(PgUUID(as_uuid=True))),
+    bindparam("user_id", type_=PgUUID(as_uuid=True)),
+)
+
+
+async def admitted_document_ids(
+    db: AsyncSession, *, user_id: uuid.UUID, document_ids: Sequence[uuid.UUID]
+) -> set[uuid.UUID]:
+    """Ground truth for a candidate set of document ids, in one round trip.
+
+    A document's true access can come from a grant on the document itself,
+    on a folder above it, or on its project — a cascade only
+    `aiper_effective_access` (migration 0003) evaluates correctly; nothing
+    here reimplements it. Used to re-verify what a coarse Qdrant filter
+    returns (`app.rag.store.search_documents`) before a chunk is ever shown
+    to a caller — the same "trust the resolver, not a filter" rule
+    `accessible_files_clause` applies to files, extended to a subject with
+    grants narrower than "the whole project".
+    """
+    if not document_ids:
+        return set()
+    rows = await db.execute(
+        _ADMITTED_DOCUMENTS, {"document_ids": list(document_ids), "user_id": user_id}
+    )
+    return {row[0] for row in rows}
