@@ -2,7 +2,7 @@ name: aiper
 
 services:
   postgres:
-    image: postgres:alpine
+    image: postgres:16-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-aiper_user}
