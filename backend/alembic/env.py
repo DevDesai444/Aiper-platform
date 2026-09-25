@@ -10,16 +10,16 @@ import asyncio
 import os
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from alembic import context
 from app.config import settings
-from app.db.base import Base
 
 # Importing the models registers every mapper on Base.metadata; without this
 # --autogenerate would see an empty schema and try to drop the world.
 from app.db import models  # noqa: F401
+from app.db.base import Base
 
 config = context.config
 

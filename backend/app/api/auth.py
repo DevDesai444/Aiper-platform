@@ -16,6 +16,7 @@ from app.core.deps import CurrentUser, DbSession
 from app.core.rate_limit import SlidingWindowRateLimiter
 from app.core.security import create_access_token, hash_password, verify_password
 from app.db.models import DocumentCollaborator, User
+from app.services.organisations import ensure_organisation
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -45,8 +46,13 @@ async def register(payload: schemas.RegisterRequest, db: DbSession) -> schemas.T
     if exists:
         raise HTTPException(status.HTTP_409_CONFLICT, "An account with that email already exists")
 
+    # The free-text organisation name decides the tenant: the same name
+    # joins the same organisation, using the slug rule migration 0002 applied
+    # to existing accounts.
+    org = await ensure_organisation(db, payload.organisation)
     user = User(
         email=email,
+        org_id=org.id,
         full_name=payload.full_name.strip(),
         organisation=payload.organisation.strip(),
         hashed_password=hash_password(payload.password),

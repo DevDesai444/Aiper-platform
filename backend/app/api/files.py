@@ -63,6 +63,7 @@ async def upload_file(
 
     asset = FileAsset(
         owner_id=user.id,
+        org_id=user.org_id,
         session_id=session_id,
         filename=file.filename or f"upload{extension}",
         content_type=file.content_type or "",
