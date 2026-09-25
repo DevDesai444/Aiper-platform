@@ -352,6 +352,34 @@
     content: "";
   }
 
+  /* Comment highlights (see components/editor/comment-mark.ts).
+     A subtle amber underline on the range with a stronger flash animation
+     when the panel scrolls a thread into view. */
+  .tiptap .comment-highlight {
+    background-color: hsl(45 96% 89% / 0.55);
+    border-bottom: 1px solid hsl(38 92% 50% / 0.7);
+    border-radius: 2px;
+    padding-bottom: 1px;
+    cursor: pointer;
+    transition: background-color 150ms ease;
+  }
+  .tiptap .comment-highlight:hover {
+    background-color: hsl(45 96% 82% / 0.75);
+  }
+  .tiptap .comment-highlight--flash {
+    animation: comment-highlight-flash 1.2s ease-out;
+  }
+  @keyframes comment-highlight-flash {
+    0% {
+      background-color: hsl(45 96% 60% / 0.85);
+      box-shadow: 0 0 0 3px hsl(45 96% 60% / 0.4);
+    }
+    100% {
+      background-color: hsl(45 96% 89% / 0.55);
+      box-shadow: 0 0 0 3px transparent;
+    }
+  }
+
   .scroll-fade-top {
     mask-image: linear-gradient(to bottom, transparent, black 18px);
   }
