@@ -11,10 +11,17 @@ from fastapi.responses import JSONResponse
 from app.api.router import api_router
 from app.config import settings
 from app.core.body_limit import BodySizeLimitMiddleware
+from app.core.logging_config import configure_logging
+from app.core.request_id import RequestIDMiddleware
 from app.core.startup import ensure_auth_configured
 from app.db.base import verify_schema
 from app.rag.store import ensure_collection
 from app.services.seed import seed_templates
+
+# As early as an import-time call can run: before the app object exists, the
+# lifespan runs, or any request is served, so every record this process
+# emits from here on — ours and uvicorn's — is one redacted JSON line.
+configure_logging()
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +63,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Added last so it is outermost (Starlette wraps in reverse add_middleware
+# order): the request id is live before CORS or the body cap run, and the
+# access log sees the true final status code, including a CORS rejection or
+# a 413.
+app.add_middleware(RequestIDMiddleware)
 
 app.include_router(api_router)
 

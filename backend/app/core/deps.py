@@ -34,6 +34,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.request_id import bind_request_identity
 from app.core.security import decode_access_token
 from app.core.supabase_auth import AuthError, verify_supabase_jwt
 from app.db.base import SessionLocal, bind_session_identity
@@ -213,8 +214,15 @@ async def current_user(
         await bind_session_identity(db, user_id)
 
     if mode == "supabase":
-        return await _provision_from_claims(db, claims)
-    return await _legacy_user(db, uuid.UUID(str(claims["sub"])))
+        user = await _provision_from_claims(db, claims)
+    else:
+        user = await _legacy_user(db, uuid.UUID(str(claims["sub"])))
+
+    # Publishes to the request-scoped contextvars in app.core.request_id, so
+    # every log line for the rest of this request — including the agent-turn
+    # line further down the call stack — can carry who it was for.
+    bind_request_identity(user_id=user.id, org_id=user.org_id)
+    return user
 
 
 CurrentUser = Annotated[User, Depends(current_user)]

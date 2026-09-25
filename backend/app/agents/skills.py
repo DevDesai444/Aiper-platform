@@ -8,6 +8,14 @@ time (`app.rag.scope`), so what a tool can reach is exactly what the access
 resolver admits at that moment — a grant revoked mid-turn is gone by the next
 tool call. The scope is applied inside the store as a mandatory Qdrant filter;
 nothing the model emits can widen it.
+
+Retrieved page text is the other half of the trust boundary: it is
+user-uploaded content, not instructions, no matter what it contains. Every
+tool below that returns page text runs it through
+`app.agents.untrusted_content.wrap_untrusted` before it ever becomes a tool
+result — see that module and `UNTRUSTED_CONTENT_RULE` in `prompts.py` for the
+full defense. Citation lines (`[filename, p.N]`) stay outside the wrapper,
+unmodified, exactly as retrieved.
 """
 
 from __future__ import annotations
@@ -18,6 +26,7 @@ from typing import Any
 
 from langchain_core.tools import BaseTool, tool
 
+from app.agents.untrusted_content import wrap_untrusted
 from app.rag import store
 from app.rag.scope import RetrievalScope, ScopeProvider, scope_provider
 
@@ -50,7 +59,7 @@ class SkillContext:
 def _render(hits: list[store.Hit], *, empty: str) -> str:
     if not hits:
         return empty
-    return "\n\n".join(f'{h.citation()}\n"{h.text.strip()}"' for h in hits)
+    return "\n\n".join(f"{h.citation()}\n{wrap_untrusted(h.text.strip())}" for h in hits)
 
 
 def build_tools(ctx: SkillContext) -> dict[str, BaseTool]:
@@ -100,7 +109,9 @@ def build_tools(ctx: SkillContext) -> dict[str, BaseTool]:
         if not pages:
             return "The target document has no indexed pages."
         name = pages[0].filename
-        body = "\n\n".join(f"--- {name}, p.{p.page} ---\n{p.text}" for p in pages)
+        body = "\n\n".join(
+            f"--- {name}, p.{p.page} ---\n{wrap_untrusted(p.text)}" for p in pages
+        )
         return f"Target document: {name} ({len(pages)} pages)\n\n{body}"
 
     @tool

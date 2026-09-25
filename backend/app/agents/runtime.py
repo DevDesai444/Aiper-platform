@@ -33,6 +33,7 @@ from langchain_core.messages import HumanMessage
 from app.agents.budget import DailyTokenBudget, default_budget
 from app.agents.skills import SkillContext
 from app.config import settings
+from app.core.request_id import get_request_id
 
 logger = logging.getLogger(__name__)
 
@@ -333,6 +334,7 @@ async def run_agent_turn(
     timeout_seconds: float | None = None,
     recursion_limit: int | None = None,
     monotonic: Callable[[], float] = time.monotonic,
+    request_id: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Run one agent turn with production guardrails.
 
@@ -352,9 +354,14 @@ async def run_agent_turn(
       generic client-facing copy; the full traceback goes to the server log.
     * **Client disconnect** (``CancelledError``) — propagated after the agent
       task is cancelled and partial usage is logged.
+
+    ``request_id`` defaults to the ambient value set by
+    :class:`app.core.request_id.RequestIDMiddleware` for the request this turn
+    is running inside (tests, which have no request, pass it explicitly).
     """
     budget = budget if budget is not None else default_budget()
     timeout = timeout_seconds if timeout_seconds is not None else settings.agent_turn_timeout_seconds
+    request_id = request_id if request_id is not None else get_request_id()
     usage = UsageAccumulator()
     started = monotonic()
 
@@ -372,8 +379,10 @@ async def run_agent_turn(
         yield {"type": "status", "value": "done"}
         yield usage.as_event(elapsed_seconds=monotonic() - started)
         _log_turn(
+            request_id=request_id,
             session_id=session_id,
             user_id=user_id,
+            org_id=ctx.org_id,
             usage=usage,
             elapsed=monotonic() - started,
             outcome="refused_over_budget",
@@ -423,8 +432,10 @@ async def run_agent_turn(
         elapsed = monotonic() - started
         budget.record(user_id, usage.total_tokens)
         _log_turn(
+            request_id=request_id,
             session_id=session_id,
             user_id=user_id,
+            org_id=ctx.org_id,
             usage=usage,
             elapsed=elapsed,
             outcome=outcome,
@@ -443,8 +454,10 @@ async def run_agent_turn(
     budget.record(user_id, usage.total_tokens)
     yield usage.as_event(elapsed_seconds=elapsed)
     _log_turn(
+        request_id=request_id,
         session_id=session_id,
         user_id=user_id,
+        org_id=ctx.org_id,
         usage=usage,
         elapsed=elapsed,
         outcome=outcome,
@@ -453,8 +466,10 @@ async def run_agent_turn(
 
 def _log_turn(
     *,
+    request_id: str | None,
     session_id: uuid.UUID | str | None,
     user_id: uuid.UUID | str | None,
+    org_id: uuid.UUID | str | None,
     usage: UsageAccumulator,
     elapsed: float,
     outcome: str,
@@ -462,8 +477,10 @@ def _log_turn(
     """One structured JSON log line per turn — cost accounting's durable record."""
     record = {
         "event": "agent_turn",
+        "request_id": request_id,
         "session_id": str(session_id) if session_id is not None else None,
         "user_id": str(user_id) if user_id is not None else None,
+        "org_id": str(org_id) if org_id is not None else None,
         "outcome": outcome,
         "elapsed_s": round(elapsed, 3),
         "total_tokens": usage.total_tokens,
