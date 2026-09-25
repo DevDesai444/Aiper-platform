@@ -7,6 +7,7 @@ recorded on the asset and surfaced in the Vault — never raised at the uploader
 
 from __future__ import annotations
 
+import logging
 import uuid
 from pathlib import Path
 
@@ -21,6 +22,8 @@ from app.core.deps import CurrentUser, DbSession
 from app.db.models import FileAsset
 from app.rag import store
 from app.rag.loaders import SUPPORTED_EXTENSIONS, load_pages
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/files", tags=["files"])
 
@@ -90,8 +93,9 @@ async def upload_file(
         )
         asset.indexed = True
     except Exception as exc:  # noqa: BLE001 - reported on the asset, not to the client
+        logger.error("Indexing failed for file %s (asset %s): %s", file.filename, asset.id, exc, exc_info=True)
         asset.indexed = False
-        asset.index_error = str(exc)[:500]
+        asset.index_error = "Indexing failed; see server logs for details."
 
     await db.commit()
     await db.refresh(asset)
