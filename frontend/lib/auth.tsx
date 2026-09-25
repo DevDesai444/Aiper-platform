@@ -107,13 +107,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw new Error(error.message);
         setUser(await api.me());
-        router.push("/chat");
+        router.push("/projects");
         return;
       }
       const result = await api.login({ email, password });
       setToken(result.access_token);
       setUser(result.user);
-      router.push("/chat");
+      router.push("/projects");
     },
     [router, supabaseAuth],
   );
@@ -130,13 +130,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return { needsEmailConfirmation: true };
         }
         setUser(await api.me());
-        router.push("/chat");
+        router.push("/projects");
         return { needsEmailConfirmation: false };
       }
       const result = await api.register(input);
       setToken(result.access_token);
       setUser(result.user);
-      router.push("/chat");
+      router.push("/projects");
       return { needsEmailConfirmation: false };
     },
     [router, supabaseAuth],

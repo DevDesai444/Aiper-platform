@@ -1,5 +1,7 @@
 "use client";
 
+import { FolderKanban } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -12,24 +14,35 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, streamChat } from "@/lib/api";
-import type { AgentEvent, ChatMessage, FileAsset, Mode } from "@/lib/types";
+import type { AgentEvent, ChatMessage, Mode } from "@/lib/types";
 import { useWorkspace } from "@/lib/workspace";
 
 interface InFlight {
   question: string;
-  attachments: { id: string; filename: string }[];
   answer: string;
   events: AgentEvent[];
 }
 
-export function ChatWorkspace({ sessionId }: { sessionId?: string }) {
+/**
+ * Chat is a global surface that can also be scoped to a project.
+ *
+ * `projectId` comes from `/chat?project=<id>` — opened from inside a project,
+ * the conversation is created against it and anything the agent writes lands
+ * there. Without it, drafts go to the caller's own Workspace project, which the
+ * backend creates on first use.
+ */
+export function ChatWorkspace({
+  sessionId,
+  projectId,
+}: {
+  sessionId?: string;
+  projectId?: string;
+}) {
   const router = useRouter();
-  const { templates, refreshSessions, refreshFiles } = useWorkspace();
+  const { templates, projects, refreshSessions } = useWorkspace();
 
   const [mode, setMode] = useState<Mode>("document_generation");
   const [templateKey, setTemplateKey] = useState<string | null>(null);
-  const [attachments, setAttachments] = useState<FileAsset[]>([]);
-  const [targetId, setTargetId] = useState<string | null>(null);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [title, setTitle] = useState("New conversation");
@@ -86,31 +99,12 @@ export function ChatWorkspace({ sessionId }: { sessionId?: string }) {
     bottomRef.current?.scrollIntoView({ behavior: inFlight ? "smooth" : "auto", block: "end" });
   }, [messages, inFlight]);
 
-  const addAttachment = useCallback(
-    (file: FileAsset) => {
-      setAttachments((current) => [...current, file]);
-      setTargetId((current) => current ?? (file.comparison_role === "target" ? file.id : null));
-      void refreshFiles();
-    },
-    [refreshFiles],
-  );
-
-  const removeAttachment = useCallback((id: string) => {
-    setAttachments((current) => current.filter((file) => file.id !== id));
-    setTargetId((current) => (current === id ? null : current));
-  }, []);
-
   const send = useCallback(
     async (message: string) => {
       const controller = new AbortController();
       abortRef.current = controller;
 
-      turnRef.current = {
-        question: message,
-        attachments: attachments.map((file) => ({ id: file.id, filename: file.filename })),
-        answer: "",
-        events: [],
-      };
+      turnRef.current = { question: message, answer: "", events: [] };
       const publish = () => setInFlight(turnRef.current ? { ...turnRef.current } : null);
       publish();
 
@@ -123,8 +117,7 @@ export function ChatWorkspace({ sessionId }: { sessionId?: string }) {
             message,
             mode,
             session_id: sessionId ?? null,
-            attachment_ids: attachments.filter((file) => file.indexed).map((file) => file.id),
-            target_attachment_id: mode === "feature_comparison" ? targetId : null,
+            project_id: projectId ?? null,
             template_key: mode === "document_generation" ? templateKey : null,
           },
           (raw) => {
@@ -172,7 +165,6 @@ export function ChatWorkspace({ sessionId }: { sessionId?: string }) {
           content: message,
           mode,
           activity: [],
-          attachments: turn?.attachments ?? [],
           created_at: stamp,
         },
         {
@@ -181,7 +173,6 @@ export function ChatWorkspace({ sessionId }: { sessionId?: string }) {
           content: turn?.answer ?? "",
           mode,
           activity: turn?.events ?? [],
-          attachments: [],
           created_at: stamp,
         },
       ]);
@@ -191,12 +182,17 @@ export function ChatWorkspace({ sessionId }: { sessionId?: string }) {
       await refreshSessions();
       if (!sessionId && outcome.sessionId) router.replace(`/chat/${outcome.sessionId}`);
     },
-    [attachments, mode, refreshSessions, router, sessionId, targetId, templateKey],
+    [mode, projectId, refreshSessions, router, sessionId, templateKey],
   );
 
   const activeTemplate = useMemo(
     () => templates.find((template) => template.key === templateKey),
     [templates, templateKey],
+  );
+
+  const project = useMemo(
+    () => projects.find((candidate) => candidate.id === projectId),
+    [projects, projectId],
   );
 
   const running = inFlight !== null;
@@ -215,6 +211,14 @@ export function ChatWorkspace({ sessionId }: { sessionId?: string }) {
         }
         actions={
           <>
+            {project ? (
+              <Button asChild variant="subtle" size="sm" title={`Scoped to ${project.name}`}>
+                <Link href={`/projects/${project.id}`}>
+                  <FolderKanban />
+                  <span className="max-w-[160px] truncate">{project.name}</span>
+                </Link>
+              </Button>
+            ) : null}
             <Badge variant={mode === "feature_comparison" ? "warning" : "brand"}>
               {mode === "feature_comparison" ? "Comparison" : "Generation"}
             </Badge>
@@ -247,6 +251,7 @@ export function ChatWorkspace({ sessionId }: { sessionId?: string }) {
                   content={message.content}
                   events={message.activity}
                   running={false}
+                  projectId={projectId}
                 />
               ),
             )}
@@ -260,11 +265,15 @@ export function ChatWorkspace({ sessionId }: { sessionId?: string }) {
                     content: inFlight.question,
                     mode,
                     activity: [],
-                    attachments: inFlight.attachments,
                     created_at: new Date().toISOString(),
                   }}
                 />
-                <AssistantMessage content={inFlight.answer} events={inFlight.events} running />
+                <AssistantMessage
+                  content={inFlight.answer}
+                  events={inFlight.events}
+                  running
+                  projectId={projectId}
+                />
               </>
             ) : null}
 
@@ -279,15 +288,9 @@ export function ChatWorkspace({ sessionId }: { sessionId?: string }) {
         templates={templates}
         templateKey={templateKey}
         onTemplateChange={setTemplateKey}
-        attachments={attachments}
-        onAttach={addAttachment}
-        onRemoveAttachment={removeAttachment}
-        targetId={targetId}
-        onTargetChange={setTargetId}
         onSubmit={(message) => void send(message)}
         onStop={() => abortRef.current?.abort()}
         running={running}
-        sessionId={sessionId ?? null}
       />
     </>
   );

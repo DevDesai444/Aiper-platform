@@ -1,6 +1,6 @@
 "use client";
 
-import { Crosshair, FileSignature, GitCompareArrows, Paperclip } from "lucide-react";
+import { FileSignature, GitCompareArrows } from "lucide-react";
 
 import { Logo } from "@/components/layout/logo";
 import type { Mode } from "@/lib/types";
@@ -10,7 +10,7 @@ const GUIDES: Record<Mode, { icon: typeof FileSignature; title: string; steps: s
     icon: FileSignature,
     title: "Document Generation",
     steps: [
-      "Attach the study reports, notes or datasheets the deliverable should be built from.",
+      "Work inside a project — its documents are the evidence the draft is built from.",
       "Pick the template — ECSS mission spec, SRS, ICD, RFP response, compliance matrix or technical note.",
       "Ask for the draft. Each section is retrieved, cited and assembled, and gaps are marked [TBC] rather than invented.",
     ],
@@ -19,8 +19,8 @@ const GUIDES: Record<Mode, { icon: typeof FileSignature; title: string; steps: s
     icon: GitCompareArrows,
     title: "Feature Comparison",
     steps: [
-      "Attach the baseline you are checking against and mark it as the target.",
-      "Attach the documents to check — supplier datasheets, offers, design notes.",
+      "Open the project holding the baseline you are checking against.",
+      "Name the documents to check — supplier datasheets, offers, design notes.",
       "Ask for the matrix. Every item gets one verdict and a page citation you can open and verify.",
     ],
   },
@@ -56,18 +56,6 @@ export function EmptyState({ mode }: { mode: Mode }) {
         ))}
       </ol>
 
-      <div className="mt-7 flex items-center gap-4 text-2xs text-muted-foreground">
-        <span className="inline-flex items-center gap-1.5">
-          <Paperclip className="size-3" />
-          Drag files onto the composer
-        </span>
-        {mode === "feature_comparison" ? (
-          <span className="inline-flex items-center gap-1.5">
-            <Crosshair className="size-3" />
-            One target, N sources
-          </span>
-        ) : null}
-      </div>
     </div>
   );
 }

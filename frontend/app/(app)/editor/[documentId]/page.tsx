@@ -1,50 +1,41 @@
 "use client";
 
-import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { useEffect } from "react";
 
-import { DocumentEditor } from "@/components/editor/document-editor";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Logo } from "@/components/layout/logo";
 import { api } from "@/lib/api";
-import type { DocumentDetail } from "@/lib/types";
 
-export default function DocumentPage() {
+/**
+ * The flat /editor list is gone: documents live in projects now. Old links are
+ * still handed out in chat history and bookmarks, so this resolves the document
+ * to its project and forwards to the project-scoped route.
+ */
+export default function LegacyDocumentRedirect() {
   const { documentId } = useParams<{ documentId: string }>();
-  const [document, setDocument] = useState<DocumentDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
 
   useEffect(() => {
     let cancelled = false;
     api
       .getDocument(documentId)
-      .then((result) => !cancelled && setDocument(result))
-      .catch((caught: Error) => !cancelled && setError(caught.message));
+      .then((document) => {
+        if (cancelled) return;
+        router.replace(
+          document.project_id
+            ? `/projects/${document.project_id}/documents/${document.id}`
+            : "/projects",
+        );
+      })
+      .catch(() => !cancelled && router.replace("/projects"));
     return () => {
       cancelled = true;
     };
-  }, [documentId]);
+  }, [documentId, router]);
 
-  if (error) {
-    return (
-      <div className="flex flex-1 items-center justify-center px-6">
-        <p className="text-[0.8125rem] text-muted-foreground">{error}</p>
-      </div>
-    );
-  }
-
-  if (!document) {
-    return (
-      <div className="flex min-h-0 flex-1">
-        <div className="flex-1 space-y-4 px-6 py-6">
-          <Skeleton className="h-8 w-72" />
-          <Skeleton className="h-[60vh] w-full" />
-        </div>
-        <div className="w-[282px] border-l border-border p-4">
-          <Skeleton className="h-6 w-32" />
-        </div>
-      </div>
-    );
-  }
-
-  return <DocumentEditor initial={document} />;
+  return (
+    <div className="flex flex-1 items-center justify-center">
+      <Logo className="size-6 animate-pulse opacity-40" />
+    </div>
+  );
 }
