@@ -17,8 +17,8 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         <div className="w-full max-w-[400px]">{children}</div>
       </main>
 
-      <footer className="px-6 py-6 text-center text-2xs text-muted-foreground">
-        Agentic document generation and compliance analysis for the space sector.
+      <footer className="flex justify-center px-6 py-6">
+        <Wordmark className="opacity-60" />
       </footer>
     </div>
   );
