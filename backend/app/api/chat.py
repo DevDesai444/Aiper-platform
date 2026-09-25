@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import uuid
 from collections.abc import AsyncIterator
 
@@ -15,14 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app import schemas
-from app.agents.runtime import run_turn
+from app.agents.runtime import run_agent_turn
 from app.agents.skills import SkillContext
 from app.config import settings
 from app.core.deps import CurrentUser, DbSession
 from app.db.base import SessionLocal
 from app.db.models import ChatMessage, ChatSession, DocumentTemplate, FileAsset, User
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -100,6 +97,7 @@ async def stream(
     return StreamingResponse(
         _turn(
             session_id=session.id,
+            user_id=user.id,
             session_title=session.title,
             ctx=ctx,
             history=history,
@@ -114,28 +112,35 @@ async def stream(
 async def _turn(
     *,
     session_id: uuid.UUID,
+    user_id: uuid.UUID,
     session_title: str,
     ctx: SkillContext,
     history: list[AnyMessage],
     question: str,
     mode: str,
 ) -> AsyncIterator[str]:
-    """Runs on its own session: the request-scoped one closes when the response starts."""
+    """Runs on its own session: the request-scoped one closes when the response starts.
+
+    The agent invocation is wrapped by :func:`run_agent_turn`, which is
+    responsible for the turn timeout, the per-user daily token budget, and
+    turning any inner exception into a safe activity event — so this function
+    only needs a narrow guard for the persist step.
+    """
     yield _sse({"type": "session", "session_id": str(session_id), "title": session_title})
 
     answer: list[str] = []
     activity: list[dict] = []
-    try:
-        async for event in run_turn(ctx=ctx, history=history, question=question):
-            if event["type"] == "token":
-                answer.append(event["value"])
-            else:
-                activity.append(event)
-            yield _sse(event)
-    except Exception as exc:  # noqa: BLE001 - surfaced to the client as a feed row
-        logger.error("Agent turn failed for session %s: %s", session_id, exc, exc_info=True)
-        event = {"type": "error", "message": "An error occurred while processing your request."}
-        activity.append(event)
+    async for event in run_agent_turn(
+        ctx=ctx,
+        history=history,
+        question=question,
+        user_id=user_id,
+        session_id=session_id,
+    ):
+        if event["type"] == "token":
+            answer.append(event["value"])
+        else:
+            activity.append(event)
         yield _sse(event)
 
     content = "".join(answer).strip()
