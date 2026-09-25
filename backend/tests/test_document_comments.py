@@ -6,6 +6,16 @@ the factories.
 
 The routes exercised here are the E6 addition described in
 ``app/api/documents.py::comments`` and ``0005_document_comments.py``.
+
+One test near the bottom (``test_comment_lifecycle_under_row_level_security``)
+uses ``rls_api`` instead of ``api`` — the same routes, but over a session
+connected as the unprivileged ``aiper_app`` role with migration 0003/0004's
+row-level security live underneath. 0005 landed before E3's RLS migrations
+existed and had to gain its own GRANT + policy block when this branch rebased
+past them (0003 enumerates the tables it protects at the time IT runs, so a
+table created later needs to add itself). Everything above this line runs
+against the superuser-bypass ``api`` fixture, which would pass even if that
+wiring were missing entirely — this one test is what actually proves it works.
 """
 
 from __future__ import annotations
@@ -313,3 +323,52 @@ async def test_mark_id_required(api, db):
         json={"mark_id": "", "body": "hi", "quoted_text": ""},
     )
     assert r.status_code == 422
+
+
+# ───────────────────────────── row-level security ──────────────────────────────
+
+
+async def test_comment_lifecycle_under_row_level_security(rls_api, db):
+    """The same routes, over the real ``aiper_app`` role, RLS policies live.
+
+    Proves 0005's GRANT + CREATE POLICY block (added on rebase past E3's RLS
+    migrations) actually lets the feature work end-to-end — not just that the
+    migration ran without a SQL error. Every ``api``-fixture test above this
+    line would still pass even if that block were deleted outright, because
+    the superuser connection those use bypasses row security entirely.
+    """
+    s = await _seed_document(db)
+
+    create = await rls_api.as_user(s["bob"]).post(
+        _url(s["document"].id),
+        json={"mark_id": "m1", "body": "hello", "quoted_text": "hi"},
+    )
+    assert create.status_code == 201, create.text
+
+    listing = await rls_api.as_user(s["charlie"]).get(_url(s["document"].id))
+    assert listing.status_code == 200, listing.text
+    assert [i["body"] for i in listing.json()["items"]] == ["hello"]
+
+    # A viewer's create is refused by the application check before any SQL
+    # runs — this is the same 403 as the api-fixture test above, now reached
+    # through a connection where the INSERT policy would also refuse it.
+    forbidden = await rls_api.as_user(s["charlie"]).post(
+        _url(s["document"].id),
+        json={"mark_id": "m2", "body": "nope", "quoted_text": ""},
+    )
+    assert forbidden.status_code == 403
+
+    resolve = await rls_api.as_user(s["alice"]).post(_url(s["document"].id, "/m1/resolve"))
+    assert resolve.status_code == 200, resolve.text
+    assert resolve.json()["comments"][0]["resolved_at"] is not None
+
+    # Mallory's org has no grant at all — the document (and therefore its
+    # comments) is a 404, indistinguishable from one that does not exist.
+    outside = await rls_api.as_user(s["mallory"]).get(_url(s["document"].id))
+    assert outside.status_code == 404
+
+    delete = await rls_api.as_user(s["alice"]).delete(_url(s["document"].id, "/m1"))
+    assert delete.status_code == 204, delete.text
+
+    after = await rls_api.as_user(s["charlie"]).get(_url(s["document"].id))
+    assert after.json()["items"] == []
