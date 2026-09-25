@@ -112,6 +112,7 @@ class FileOut(ORMModel):
     index_error: str | None
     comparison_role: str
     session_id: uuid.UUID | None
+    project_id: uuid.UUID | None
     created_at: datetime
 
 

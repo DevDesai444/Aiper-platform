@@ -20,6 +20,7 @@ from app.config import settings
 from app.core.deps import CurrentUser, DbSession
 from app.db.base import SessionLocal
 from app.db.models import ChatMessage, ChatSession, DocumentTemplate, FileAsset, User
+from app.rag.scope import accessible_files_clause
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -214,17 +215,29 @@ async def _load_history(db: AsyncSession, session_id: uuid.UUID) -> list[AnyMess
 async def _build_context(
     db: AsyncSession, payload: schemas.ChatRequest, user: User
 ) -> SkillContext:
+    # Attachment ids come from the client and are only kept if the caller can
+    # actually read the file — own upload, or a project the resolver admits.
+    # The target id gets the same treatment: before this check it flowed into
+    # the context unvalidated, leaving the vector filter as the only defence.
     attachment_ids: list[uuid.UUID] = []
+    target_id: uuid.UUID | None = None
     filenames: dict[str, str] = {}
-    if payload.attachment_ids:
+    wanted = set(payload.attachment_ids)
+    if payload.target_attachment_id:
+        wanted.add(payload.target_attachment_id)
+    if wanted:
         result = await db.execute(
             select(FileAsset).where(
-                FileAsset.owner_id == user.id, FileAsset.id.in_(payload.attachment_ids)
+                FileAsset.id.in_(wanted),
+                accessible_files_clause(user_id=user.id, org_id=user.org_id),
             )
         )
         assets = list(result.scalars().all())
         filenames = {str(a.id): a.filename for a in assets}
-        attachment_ids = [a.id for a in assets]
+        readable = {a.id for a in assets}
+        attachment_ids = [i for i in payload.attachment_ids if i in readable]
+        if payload.target_attachment_id in readable:
+            target_id = payload.target_attachment_id
 
     templates = (
         (
@@ -243,9 +256,10 @@ async def _build_context(
 
     return SkillContext(
         owner_id=user.id,
+        org_id=user.org_id,
         mode=payload.mode,
         attachment_ids=attachment_ids,
-        target_attachment_id=payload.target_attachment_id,
+        target_attachment_id=target_id,
         template_key=payload.template_key,
         templates=[
             {

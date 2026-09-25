@@ -1,8 +1,13 @@
 """Tools, bound to one request.
 
-Every tool is a closure over a `SkillContext`. That is how per-user isolation is
+Every tool is a closure over a `SkillContext`. That is how isolation is
 enforced at the tool layer rather than by prompt instruction: the agent cannot
-pass an owner_id, because it never sees one.
+pass an owner or an organisation, because it never sees either. Every
+retrieval re-derives the caller's `RetrievalScope` from the database at call
+time (`app.rag.scope`), so what a tool can reach is exactly what the access
+resolver admits at that moment — a grant revoked mid-turn is gone by the next
+tool call. The scope is applied inside the store as a mandatory Qdrant filter;
+nothing the model emits can widen it.
 """
 
 from __future__ import annotations
@@ -14,11 +19,16 @@ from typing import Any
 from langchain_core.tools import BaseTool, tool
 
 from app.rag import store
+from app.rag.scope import RetrievalScope, ScopeProvider, scope_provider
 
 
 @dataclass(slots=True)
 class SkillContext:
     owner_id: uuid.UUID
+    # The tenancy the request runs under. org_id=None fails closed: a scope
+    # without an organisation retrieves nothing at all.
+    org_id: uuid.UUID | None = None
+    scope_provider: ScopeProvider | None = None
     mode: str = "document_generation"
     attachment_ids: list[uuid.UUID] = field(default_factory=list)
     target_attachment_id: uuid.UUID | None = None
@@ -29,6 +39,12 @@ class SkillContext:
     @property
     def source_ids(self) -> list[uuid.UUID]:
         return [i for i in self.attachment_ids if i != self.target_attachment_id]
+
+    async def fresh_scope(self) -> RetrievalScope:
+        provider = self.scope_provider or scope_provider(
+            user_id=self.owner_id, org_id=self.org_id
+        )
+        return await provider()
 
 
 def _render(hits: list[store.Hit], *, empty: str) -> str:
@@ -48,7 +64,7 @@ def build_tools(ctx: SkillContext) -> dict[str, BaseTool]:
         requirement wording or a key term as the query.
         """
         hits = await store.search(
-            owner_id=ctx.owner_id,
+            scope=await ctx.fresh_scope(),
             query=query,
             limit=max(1, min(limit, 12)),
             file_ids=ctx.attachment_ids or None,
@@ -66,7 +82,7 @@ def build_tools(ctx: SkillContext) -> dict[str, BaseTool]:
         if not source_ids:
             return "No source documents were attached — only a target."
         hits = await store.search(
-            owner_id=ctx.owner_id,
+            scope=await ctx.fresh_scope(),
             query=requirement,
             limit=max(1, min(limit, 10)),
             file_ids=source_ids,
@@ -79,7 +95,7 @@ def build_tools(ctx: SkillContext) -> dict[str, BaseTool]:
         if not ctx.target_attachment_id:
             return "No target document was designated for this comparison."
         pages = await store.read_file_pages(
-            owner_id=ctx.owner_id, file_id=ctx.target_attachment_id
+            scope=await ctx.fresh_scope(), file_id=ctx.target_attachment_id
         )
         if not pages:
             return "The target document has no indexed pages."

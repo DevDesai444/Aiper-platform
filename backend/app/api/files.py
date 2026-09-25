@@ -19,9 +19,10 @@ from sqlalchemy import select
 from app import schemas
 from app.config import settings
 from app.core.deps import CurrentUser, DbSession
-from app.db.models import FileAsset
+from app.db.models import ChatSession, FileAsset
 from app.rag import store
 from app.rag.loaders import SUPPORTED_EXTENSIONS, load_pages
+from app.services.permissions import require_access
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ async def upload_file(
     db: DbSession,
     file: UploadFile = File(...),
     session_id: uuid.UUID | None = Form(default=None),
+    project_id: uuid.UUID | None = Form(default=None),
     comparison_role: str = Form(default="source"),
 ) -> FileAsset:
     extension = Path(file.filename or "").suffix.lower()
@@ -53,6 +55,18 @@ async def upload_file(
             f"Unsupported file type '{extension}'. Accepted: "
             + ", ".join(sorted(SUPPORTED_EXTENSIONS)),
         )
+
+    # Both ids come from the client. A conversation must be the caller's own,
+    # and filing into a project is a write to it, so it takes editor access —
+    # the resolver decides, exactly as it does for the project routes.
+    if session_id is not None:
+        session = (
+            await db.execute(select(ChatSession).where(ChatSession.id == session_id))
+        ).scalar_one_or_none()
+        if session is None or session.owner_id != user.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Conversation not found")
+    if project_id is not None:
+        await require_access(db, user, "project", project_id, "editor")
 
     payload = await file.read()
     if len(payload) > settings.max_upload_mb * 1024 * 1024:
@@ -64,6 +78,7 @@ async def upload_file(
     asset = FileAsset(
         owner_id=user.id,
         org_id=user.org_id,
+        project_id=project_id,
         session_id=session_id,
         filename=file.filename or f"upload{extension}",
         content_type=file.content_type or "",
@@ -84,8 +99,12 @@ async def upload_file(
         pages = await run_sync(load_pages, destination, extension)
         if not pages:
             raise ValueError("No extractable text — the file may be a scan without a text layer")
+        # Tenancy on every point comes from the asset row, the single source
+        # of truth the retrieval filter is checked against.
         asset.page_count = await store.index_pages(
-            owner_id=user.id,
+            owner_id=asset.owner_id,
+            org_id=asset.org_id,
+            project_id=asset.project_id,
             file_id=asset.id,
             filename=asset.filename,
             session_id=session_id,
@@ -117,7 +136,7 @@ async def set_role(
 @router.delete("/{file_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
 async def delete_file(file_id: uuid.UUID, user: CurrentUser, db: DbSession) -> None:
     asset = await _owned(file_id, user.id, db)
-    await store.delete_file(owner_id=user.id, file_id=asset.id)
+    await store.delete_file(org_id=asset.org_id, owner_id=user.id, file_id=asset.id)
     if asset.storage_path:
         await AsyncPath(asset.storage_path).unlink(missing_ok=True)
     await db.delete(asset)
