@@ -118,6 +118,18 @@ class Settings(BaseSettings):
             )
 
 
+    # agent runtime (E6)
+    # Wall-clock cap for one agent turn. On expiry the client stream ends with a
+    # clean final activity event and a normal assistant message — never a hung
+    # stream or a 500. Applies to the whole graph invocation, sub-agents included.
+    agent_turn_timeout_seconds: int = 420
+    # Per-user token budget, summed across all model calls in one UTC day.
+    # 0 disables the cap. Enforcement is in-process only (resets on restart) —
+    # a shared Redis counter is a later step; for now the value is best-effort
+    # per worker and the per-turn structured usage log is the durable record.
+    agent_daily_token_cap: int = 2_000_000
+
+
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
