@@ -27,12 +27,16 @@ from typing import Any
 
 import pytest_asyncio
 from app.config import settings
+from app.db.models import Document
 from app.rag import backfill_documents as backfill_documents_module
 from app.rag import store
 from app.rag.corpus import chunk_document, reindex_document
 from app.rag.loaders import Page
 from app.rag.scope import RetrievalScope, admitted_document_ids, compute_scope
 from qdrant_client import AsyncQdrantClient, models
+from sqlalchemy import select
+
+from tests.conftest import anonymous
 
 from .factories import make_document, make_grant, make_org, make_project, make_user
 
@@ -645,3 +649,26 @@ async def test_backfill_documents_reads_through_the_privileged_connection_when_c
     assert seen >= 1
     points = await _document_points(document.id)
     assert len(points) == 1
+
+
+async def test_backfill_documents_sees_every_org_even_though_the_app_role_alone_sees_none(
+    doc_world, app_session_factory, migrated_dsn, monkeypatch
+):
+    """The same regression proven for rag/backfill.py in test_rag_isolation.py,
+    proven here for rag/backfill_documents.py.
+
+    `SessionLocal` is monkeypatched to the unprivileged, unbound app role —
+    exactly what it resolves to in a real deployment, and exactly what
+    `backfill()` used unconditionally before this fix. That makes this a
+    real tripwire: if the privileged-connection branch were ever removed,
+    `backfill()` would fall through to this same deny-all session and read
+    zero rows — this test would then fail on the row count below.
+    """
+    monkeypatch.setattr(backfill_documents_module, "SessionLocal", app_session_factory)
+
+    async with anonymous(app_session_factory) as blind:
+        assert (await blind.execute(select(Document))).scalars().all() == []
+
+    monkeypatch.setattr(settings, "alembic_database_url", migrated_dsn)
+    seen = await backfill_documents_module.backfill(dry_run=True)
+    assert seen == 2  # p_doc (acme) and g_doc (globex)

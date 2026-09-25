@@ -19,12 +19,16 @@ import uuid
 import pytest_asyncio
 from app.agents.skills import SkillContext, build_tools
 from app.config import settings
+from app.db.models import FileAsset
 from app.rag import backfill as backfill_module
 from app.rag import store
 from app.rag.loaders import Page
 from app.rag.scope import RetrievalScope, compute_scope
 from app.services import permissions
 from qdrant_client import AsyncQdrantClient, models
+from sqlalchemy import select
+
+from tests.conftest import anonymous
 
 from .factories import make_file_asset, make_grant, make_org, make_project, make_user
 
@@ -295,6 +299,35 @@ async def test_backfill_restores_visibility_for_pre_tenancy_points(
     for outsider in (bob, eve):
         hits = await store.search(scope=await _scope(db, outsider), query=old_text, limit=12)
         assert old_id not in {h.file_id for h in hits}
+
+
+async def test_backfill_sees_every_org_even_though_the_app_role_alone_sees_none(
+    world, app_session_factory, migrated_dsn, monkeypatch
+):
+    """The regression migration 0003's row-level security introduced and this
+    unit fixed: a system job walking every organisation's files at once must
+    not silently collapse to zero rows and report success anyway.
+
+    `SessionLocal` is monkeypatched to the unprivileged, unbound app role —
+    exactly what it resolves to in a real deployment (DATABASE_URL is
+    aiper_app), and exactly what `backfill()` used unconditionally before
+    this fix. That makes this a real tripwire, not just an illustration: if
+    the privileged-connection branch were ever removed, `backfill()` would
+    fall through to this same deny-all session and read zero rows — this
+    test would then fail on the row count below, not silently pass.
+    """
+    monkeypatch.setattr(backfill_module, "SessionLocal", app_session_factory)
+
+    # The failure mode in isolation, before backfill() is even called:
+    # unbound and RLS-active, nothing comes back.
+    async with anonymous(app_session_factory) as blind:
+        assert (await blind.execute(select(FileAsset))).scalars().all() == []
+
+    # backfill(), configured with the privileged connection, never touches
+    # the deny-all session above and reads every file row regardless.
+    monkeypatch.setattr(settings, "alembic_database_url", migrated_dsn)
+    seen = await backfill_module.backfill(dry_run=True)
+    assert seen == 3  # p_file, u_file, g_file — spanning acme and globex
 
 
 # ───────────────────────────── the agent's tools ──────────────────────────
