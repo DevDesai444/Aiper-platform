@@ -14,6 +14,7 @@ from sqlalchemy import select
 from app import schemas
 from app.core.deps import CurrentUser, DbSession
 from app.db.models import Document, Folder, Project
+from app.services import audit
 from app.services.permissions import (
     access_expression,
     effective_access,
@@ -60,6 +61,15 @@ async def create_project(
         role="owner",
         granted_by=user.id,
     )
+    await audit.record_audit(
+        db,
+        org_id=user.org_id,
+        actor_id=user.id,
+        action=audit.PROJECT_CREATE,
+        subject_type="project",
+        subject_id=project.id,
+        payload={"name": project.name},
+    )
     await db.commit()
     await db.refresh(project)
     return _project_out(project, "owner")
@@ -102,6 +112,16 @@ async def create_folder(
         name=payload.name,
     )
     db.add(folder)
+    await db.flush()
+    await audit.record_audit(
+        db,
+        org_id=user.org_id,
+        actor_id=user.id,
+        action=audit.FOLDER_CREATE,
+        subject_type="folder",
+        subject_id=folder.id,
+        payload={"name": folder.name, "project_id": str(project_id)},
+    )
     await db.commit()
     await db.refresh(folder)
     return folder

@@ -352,7 +352,18 @@ async def test_the_ancestor_walk_is_depth_capped(db):
 
 
 async def test_a_parent_in_another_project_carries_nothing(db):
-    """The walk refuses to leave the project, whatever parent_folder_id says."""
+    """The walk refuses to leave the project, whatever parent_folder_id says.
+
+    Since migration 0003 the cross-project parent is not merely inert but
+    unwritable — the composite foreign key (parent_folder_id, project_id)
+    refuses the row — so this test proves both layers: the constraint throws,
+    and a row forged past it (referential triggers disabled, which is what a
+    privileged rewrite looks like) still carries no access.
+    """
+    import pytest
+    from sqlalchemy import text as sql
+    from sqlalchemy.exc import IntegrityError
+
     org = await make_org(db, "org")
     alice = await make_user(db, org, "alice@org.example")
     bob = await make_user(db, org, "bob@org.example")
@@ -372,8 +383,25 @@ async def test_a_parent_in_another_project_carries_nothing(db):
         user_id=bob.id,
         role="owner",
     )
-    # Violate the service-layer invariant directly.
-    her_folder.parent_folder_id = his_folder.id
-    await db.flush()
+    await db.commit()
+    # Captured before the failed flush below: its rollback expires the ORM
+    # instances, and this test only needs the ids anyway.
+    her_folder_id, his_folder_id = str(her_folder.id), str(his_folder.id)
+    bob_id, document_id = bob.id, document.id
 
-    assert await effective_access(db, bob.id, "document", document.id) is None
+    # Layer one: the schema refuses the service-layer invariant's violation.
+    her_folder.parent_folder_id = his_folder.id
+    with pytest.raises(IntegrityError):
+        await db.flush()
+    await db.rollback()
+
+    # Layer two: forged past the constraint, the resolver still refuses.
+    await db.execute(sql("ALTER TABLE folders DISABLE TRIGGER ALL"))
+    await db.execute(
+        sql("UPDATE folders SET parent_folder_id = :p WHERE id = :f"),
+        {"p": his_folder_id, "f": her_folder_id},
+    )
+    await db.execute(sql("ALTER TABLE folders ENABLE TRIGGER ALL"))
+    await db.commit()
+
+    assert await effective_access(db, bob_id, "document", document_id) is None

@@ -31,6 +31,7 @@ from app.rag import store
 from app.rag.loaders import SUPPORTED_EXTENSIONS, ParseRejected
 from app.rag.sandbox import ParseCrashed, parse_in_sandbox
 from app.rag.scope import accessible_files_clause
+from app.services import audit
 from app.services.permissions import require_access
 from app.services.uploads import CANONICAL_CONTENT_TYPES, sanitize_filename, save_validated
 
@@ -159,6 +160,18 @@ async def upload_file(
         asset.index_error = "Indexing failed; see server logs for details."
 
     try:
+        # The audit event rides the same transaction as the row (the E3
+        # invariant), and shares its failure path: a commit that never lands
+        # leaves no bytes and no points behind it.
+        await audit.record_audit(
+            db,
+            org_id=user.org_id,
+            actor_id=user.id,
+            action=audit.FILE_UPLOAD,
+            subject_type="file",
+            subject_id=asset.id,
+            payload={"filename": asset.filename, "size_bytes": asset.size_bytes},
+        )
         await db.commit()
     except BaseException:
         # The row is lost; leave no bytes (or points) orphaned behind it.
@@ -189,6 +202,15 @@ async def delete_file(file_id: uuid.UUID, user: CurrentUser, db: DbSession) -> N
     await store.delete_file(org_id=asset.org_id, owner_id=user.id, file_id=asset.id)
     if asset.storage_path:
         await AsyncPath(asset.storage_path).unlink(missing_ok=True)
+    await audit.record_audit(
+        db,
+        org_id=user.org_id,
+        actor_id=user.id,
+        action=audit.FILE_DELETE,
+        subject_type="file",
+        subject_id=asset.id,
+        payload={"filename": asset.filename},
+    )
     await db.delete(asset)
     await db.commit()
 

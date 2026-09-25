@@ -7,6 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEFAULT_JWT_SECRET = "super_secret_jwt_key_change_me"
 _DEFAULT_DB_PASSWORD = "aiper_password"
+_DEFAULT_APP_DB_PASSWORD = "aiper_app_password"
 
 
 class Settings(BaseSettings):
@@ -25,8 +26,15 @@ class Settings(BaseSettings):
     azure_openai_chat_deployment_name: str = "gpt-4o"
     azure_openai_embedding_deployment_name: str = "text-embedding-3-large"
 
-    # Database
-    database_url: str = "postgresql+asyncpg://aiper_user:aiper_password@postgres:5432/aiper_db"
+    # Database — two roles since migration 0003.
+    # The API serves as aiper_app: LOGIN only, no superuser, no BYPASSRLS, so
+    # the row-level-security policies are the law for every request.
+    database_url: str = "postgresql+asyncpg://aiper_app:aiper_app_password@postgres:5432/aiper_db"
+    # Migrations, and boot-time seeding of the built-in templates, run with the
+    # privileged role (env ALEMBIC_DATABASE_URL — the entrypoint already needs
+    # it to `alembic upgrade head`). Empty means "use database_url", which only
+    # works while that URL still carries a privileged role.
+    alembic_database_url: str = ""
 
     # Security
     jwt_secret: str = _DEFAULT_JWT_SECRET
@@ -105,11 +113,13 @@ class Settings(BaseSettings):
                 "JWT_SECRET is empty or still the default placeholder. "
                 "Set a strong random value via the JWT_SECRET environment variable."
             )
-        if _DEFAULT_DB_PASSWORD in self.database_url:
-            errors.append(
-                "DATABASE_URL still contains the default password 'aiper_password'. "
-                "Set a strong password via the DATABASE_URL environment variable."
-            )
+        for label, url in (("DATABASE_URL", self.database_url), ("ALEMBIC_DATABASE_URL", self.alembic_database_url)):
+            for default_password in (_DEFAULT_DB_PASSWORD, _DEFAULT_APP_DB_PASSWORD):
+                if default_password in url:
+                    errors.append(
+                        f"{label} still contains the default password '{default_password}'. "
+                        f"Set a strong password via the {label} environment variable."
+                    )
         if errors:
             bullet_list = "\n  - ".join(errors)
             raise RuntimeError(

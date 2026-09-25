@@ -24,6 +24,7 @@ from app.db.models import (
     RevisionDiff,
     User,
 )
+from app.services import audit
 from app.services.diff import diff_text
 from app.services.documents import empty_document, markdown_to_tiptap, tiptap_to_text
 from app.services.permissions import (
@@ -255,6 +256,15 @@ async def create_document(
         author=user,
         source="human",
     )
+    await audit.record_audit(
+        db,
+        org_id=document.org_id,
+        actor_id=user.id,
+        action=audit.DOCUMENT_CREATE,
+        subject_type="document",
+        subject_id=document.id,
+        payload={"title": document.title, "source": "human"},
+    )
     await db.commit()
     return await _detail(db, await _load(db, document.id), "owner")
 
@@ -280,6 +290,15 @@ async def create_from_markdown(
         message=payload.commit_message,
         author=user,
         source="agent",
+    )
+    await audit.record_audit(
+        db,
+        org_id=document.org_id,
+        actor_id=user.id,
+        action=audit.DOCUMENT_CREATE,
+        subject_type="document",
+        subject_id=document.id,
+        payload={"title": document.title, "source": "agent"},
     )
     await db.commit()
     return await _detail(db, await _load(db, document.id), "owner")
@@ -309,6 +328,15 @@ async def rename_document(
 async def delete_document(document_id: uuid.UUID, user: CurrentUser, db: DbSession) -> None:
     await resolve_access(db, document_id, user, "owner")
     document = await _load(db, document_id)
+    await audit.record_audit(
+        db,
+        org_id=document.org_id,
+        actor_id=user.id,
+        action=audit.DOCUMENT_DELETE,
+        subject_type="document",
+        subject_id=document.id,
+        payload={"title": document.title, "revision_count": document.revision_count},
+    )
     await db.delete(document)
     await db.commit()
 
@@ -320,13 +348,22 @@ async def commit(
     access = await resolve_access(db, document_id, user, "editor")
     document = await _load(db, document_id)
 
-    await _commit(
+    revision = await _commit(
         db,
         document=document,
         content_json=payload.content_json,
         message=payload.commit_message,
         author=user,
         source="human",
+    )
+    await audit.record_audit(
+        db,
+        org_id=document.org_id,
+        actor_id=user.id,
+        action=audit.DOCUMENT_COMMIT,
+        subject_type="document",
+        subject_id=document.id,
+        payload={"revision_number": revision.revision_number, "message": revision.commit_message},
     )
     await db.commit()
     return await _detail(db, await _load(db, document_id), access)
@@ -364,13 +401,25 @@ async def restore(
     if revision is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Revision not found")
 
-    await _commit(
+    restored = await _commit(
         db,
         document=document,
         content_json=revision.content_json,
         message=f"Restore revision {revision.revision_number}",
         author=user,
         source="human",
+    )
+    await audit.record_audit(
+        db,
+        org_id=document.org_id,
+        actor_id=user.id,
+        action=audit.DOCUMENT_RESTORE,
+        subject_type="document",
+        subject_id=document.id,
+        payload={
+            "restored_revision_number": revision.revision_number,
+            "new_revision_number": restored.revision_number,
+        },
     )
     await db.commit()
     return await _detail(db, await _load(db, document_id), access)
@@ -426,6 +475,19 @@ async def add_collaborator(
             granted_by=user.id,
         )
 
+    await audit.record_audit(
+        db,
+        org_id=document.org_id,
+        actor_id=user.id,
+        action=audit.SHARE_GRANT,
+        subject_type="document",
+        subject_id=document.id,
+        payload={
+            "email": email,
+            "role": payload.role,
+            "granted": bool(invitee is not None and invitee.org_id == document.org_id),
+        },
+    )
     await db.commit()
     await db.refresh(share)
     return share
@@ -446,5 +508,14 @@ async def remove_collaborator(
         await revoke_access(
             db, subject_type="document", subject_id=document.id, user_id=share.user_id
         )
+    await audit.record_audit(
+        db,
+        org_id=document.org_id,
+        actor_id=user.id,
+        action=audit.SHARE_REVOKE,
+        subject_type="document",
+        subject_id=document.id,
+        payload={"email": share.email, "role": share.role},
+    )
     await db.delete(share)
     await db.commit()
