@@ -12,37 +12,42 @@ import {
 
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import type { ChatSession, DocumentSummary, DocumentTemplate, FileAsset } from "@/lib/types";
+import type { ChatSession, DocumentSummary, DocumentTemplate, Project } from "@/lib/types";
 
 interface WorkspaceState {
+  projects: Project[];
   sessions: ChatSession[];
   documents: DocumentSummary[];
-  files: FileAsset[];
   templates: DocumentTemplate[];
+  refreshProjects: () => Promise<void>;
   refreshSessions: () => Promise<void>;
   refreshDocuments: () => Promise<void>;
-  refreshFiles: () => Promise<void>;
   refreshTemplates: () => Promise<void>;
 }
 
 const WorkspaceContext = createContext<WorkspaceState | null>(null);
 
-/** One place for the collections the sidebar and several pages both need. */
+/**
+ * One place for the collections the sidebar and several pages both need.
+ *
+ * Every list here is already filtered by the access resolver on the server, so
+ * what arrives is exactly what the caller may see — the UI never filters again.
+ */
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
+  const [projects, setProjects] = useState<Project[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
-  const [files, setFiles] = useState<FileAsset[]>([]);
   const [templates, setTemplates] = useState<DocumentTemplate[]>([]);
 
+  const refreshProjects = useCallback(async () => {
+    setProjects(await api.listProjects().catch(() => []));
+  }, []);
   const refreshSessions = useCallback(async () => {
     setSessions(await api.listSessions().catch(() => []));
   }, []);
   const refreshDocuments = useCallback(async () => {
     setDocuments(await api.listDocuments().catch(() => []));
-  }, []);
-  const refreshFiles = useCallback(async () => {
-    setFiles(await api.listFiles().catch(() => []));
   }, []);
   const refreshTemplates = useCallback(async () => {
     setTemplates(await api.listTemplates().catch(() => []));
@@ -50,31 +55,31 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!user) return;
+    void refreshProjects();
     void refreshSessions();
     void refreshDocuments();
-    void refreshFiles();
     void refreshTemplates();
-  }, [user, refreshSessions, refreshDocuments, refreshFiles, refreshTemplates]);
+  }, [user, refreshProjects, refreshSessions, refreshDocuments, refreshTemplates]);
 
   const value = useMemo(
     () => ({
+      projects,
       sessions,
       documents,
-      files,
       templates,
+      refreshProjects,
       refreshSessions,
       refreshDocuments,
-      refreshFiles,
       refreshTemplates,
     }),
     [
+      projects,
       sessions,
       documents,
-      files,
       templates,
+      refreshProjects,
       refreshSessions,
       refreshDocuments,
-      refreshFiles,
       refreshTemplates,
     ],
   );

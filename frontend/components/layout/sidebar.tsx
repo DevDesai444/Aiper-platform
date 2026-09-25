@@ -2,8 +2,7 @@
 
 import {
   ChevronsUpDown,
-  FileStack,
-  GitBranch,
+  FolderKanban,
   LogOut,
   MessagesSquare,
   Plus,
@@ -29,9 +28,8 @@ import { cn, initials } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace";
 
 const NAV = [
+  { href: "/projects", label: "Projects", icon: FolderKanban },
   { href: "/chat", label: "Chat", icon: MessagesSquare },
-  { href: "/editor", label: "Traceability Editor", icon: GitBranch },
-  { href: "/vault", label: "Document Vault", icon: FileStack },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
@@ -43,7 +41,7 @@ export function Sidebar() {
   return (
     <aside className="flex w-[248px] shrink-0 flex-col border-r border-border bg-surface-sunken">
       <div className="flex h-14 items-center justify-between px-4">
-        <Link href="/chat" className="rounded-md">
+        <Link href="/projects" className="rounded-md">
           <Wordmark />
         </Link>
         {health?.mock ? (
@@ -89,7 +87,7 @@ export function Sidebar() {
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
           {sessions.length === 0 ? (
             <p className="px-2.5 py-1.5 text-2xs leading-relaxed text-muted-foreground/80">
-              Nothing yet. Attach a source and ask for a draft.
+              Nothing yet. Ask for a draft and it will appear here.
             </p>
           ) : (
             <ul className="space-y-0.5">

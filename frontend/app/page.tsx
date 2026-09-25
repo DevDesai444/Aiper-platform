@@ -10,7 +10,7 @@ export default function IndexPage() {
   const router = useRouter();
 
   useEffect(() => {
-    router.replace(getToken() ? "/chat" : "/login");
+    router.replace(getToken() ? "/projects" : "/login");
   }, [router]);
 
   return (

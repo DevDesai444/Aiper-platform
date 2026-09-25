@@ -1,5 +1,47 @@
 export type Mode = "document_generation" | "feature_comparison";
 
+/* ── The tenancy tree: organisation → project → folder → document ────── */
+
+/** The caller's own effective role, as the access resolver reports it. */
+export type AccessRole = "owner" | "editor" | "viewer";
+
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  created_at: string;
+  updated_at: string;
+  access: AccessRole;
+}
+
+export interface Folder {
+  id: string;
+  project_id: string;
+  parent_folder_id: string | null;
+  name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TreeDocument {
+  id: string;
+  title: string;
+  folder_id: string | null;
+  revision_count: number;
+  updated_at: string;
+}
+
+/**
+ * Only what the caller may see. `project` is null when they reach into this
+ * project through a folder or document grant without being able to see the
+ * project itself.
+ */
+export interface ProjectTree {
+  project: Project | null;
+  folders: Folder[];
+  documents: TreeDocument[];
+}
+
 export interface User {
   id: string;
   email: string;
@@ -12,19 +54,6 @@ export interface AuthResponse {
   access_token: string;
   token_type: string;
   user: User;
-}
-
-export interface FileAsset {
-  id: string;
-  filename: string;
-  extension: string;
-  size_bytes: number;
-  page_count: number;
-  indexed: boolean;
-  index_error: string | null;
-  comparison_role: "source" | "target";
-  session_id: string | null;
-  created_at: string;
 }
 
 export interface TemplateSection {
@@ -83,7 +112,6 @@ export interface ChatMessage {
   content: string;
   mode: Mode | null;
   activity: AgentEvent[];
-  attachments: { id: string; filename: string }[];
   created_at: string;
 }
 
@@ -131,6 +159,8 @@ export interface DocumentSummary {
   updated_at: string;
   access: "owner" | "shared" | "editor" | "viewer";
   owner_email: string;
+  project_id: string | null;
+  folder_id: string | null;
 }
 
 export interface DocumentDetail extends DocumentSummary {

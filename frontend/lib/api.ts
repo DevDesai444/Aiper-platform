@@ -9,9 +9,11 @@ import type {
   DocumentDetail,
   DocumentSummary,
   DocumentTemplate,
-  FileAsset,
+  Folder,
   Health,
   Mode,
+  Project,
+  ProjectTree,
   TemplateSection,
   User,
 } from "./types";
@@ -109,18 +111,16 @@ export const api = {
     request<AuthResponse>("/api/v1/auth/login", { method: "POST", body: JSON.stringify(body) }),
   me: () => request<User>("/api/v1/auth/me"),
 
-  /* files */
-  listFiles: () => request<FileAsset[]>("/api/v1/files"),
-  uploadFile: (file: File, options: { sessionId?: string; role?: "source" | "target" } = {}) => {
-    const form = new FormData();
-    form.append("file", file);
-    if (options.sessionId) form.append("session_id", options.sessionId);
-    form.append("comparison_role", options.role ?? "source");
-    return request<FileAsset>("/api/v1/files", { method: "POST", body: form });
-  },
-  setFileRole: (id: string, role: "source" | "target") =>
-    request<FileAsset>(`/api/v1/files/${id}/role?role=${role}`, { method: "PATCH" }),
-  deleteFile: (id: string) => request<void>(`/api/v1/files/${id}`, { method: "DELETE" }),
+  /* projects, folders and the tree */
+  listProjects: () => request<Project[]>("/api/v1/projects"),
+  createProject: (body: { name: string; description?: string }) =>
+    request<Project>("/api/v1/projects", { method: "POST", body: JSON.stringify(body) }),
+  getProjectTree: (id: string) => request<ProjectTree>(`/api/v1/projects/${id}/tree`),
+  createFolder: (projectId: string, body: { name: string; parent_folder_id?: string | null }) =>
+    request<Folder>(`/api/v1/projects/${projectId}/folders`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   /* templates */
   listTemplates: () => request<DocumentTemplate[]>("/api/v1/templates"),
@@ -139,9 +139,16 @@ export const api = {
 
   /* documents */
   listDocuments: () => request<DocumentSummary[]>("/api/v1/documents"),
-  createDocument: (body: { title: string }) =>
+  createDocument: (body: { title: string; project_id: string; folder_id?: string | null }) =>
     request<DocumentDetail>("/api/v1/documents", { method: "POST", body: JSON.stringify(body) }),
-  createFromMarkdown: (body: { title: string; markdown: string; commit_message?: string }) =>
+  createFromMarkdown: (body: {
+    title: string;
+    markdown: string;
+    commit_message?: string;
+    /** Omitted means the caller's own Workspace project, created on first use. */
+    project_id?: string | null;
+    folder_id?: string | null;
+  }) =>
     request<DocumentDetail>("/api/v1/documents/from-markdown", {
       method: "POST",
       body: JSON.stringify(body),
@@ -179,8 +186,8 @@ export interface StreamRequest {
   message: string;
   mode: Mode;
   session_id?: string | null;
-  attachment_ids: string[];
-  target_attachment_id?: string | null;
+  /** Scopes a new conversation to a project; ignored for an existing session. */
+  project_id?: string | null;
   template_key?: string | null;
 }
 

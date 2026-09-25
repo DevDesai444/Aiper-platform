@@ -4,7 +4,7 @@ import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table
 import { Placeholder } from "@tiptap/extensions";
 import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import { Eye, GitCommitHorizontal, MoreHorizontal, Trash2 } from "lucide-react";
+import { Eye, GitCommitHorizontal, History, MoreHorizontal, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -40,7 +40,14 @@ function extensions(placeholder: string) {
   ];
 }
 
-export function DocumentEditor({ initial }: { initial: DocumentDetail }) {
+export function DocumentEditor({
+  initial,
+  backHref = "/projects",
+}: {
+  initial: DocumentDetail;
+  /** Where deleting the document returns to. */
+  backHref?: string;
+}) {
   const router = useRouter();
   const { refreshDocuments } = useWorkspace();
 
@@ -49,6 +56,9 @@ export function DocumentEditor({ initial }: { initial: DocumentDetail }) {
   const [dirty, setDirty] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [commitOpen, setCommitOpen] = useState(false);
+  // Traceability is on by default in the data, not on the screen: commits keep
+  // recording automatically, and the history is here the moment it is asked for.
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const readOnly = document.access === "viewer";
 
@@ -123,7 +133,7 @@ export function DocumentEditor({ initial }: { initial: DocumentDetail }) {
     try {
       await api.deleteDocument(document.id);
       await refreshDocuments();
-      router.push("/editor");
+      router.push(backHref);
     } catch (error) {
       toast.error("Could not delete the document", {
         description: error instanceof Error ? error.message : undefined,
@@ -168,6 +178,19 @@ export function DocumentEditor({ initial }: { initial: DocumentDetail }) {
           ) : (
             <Badge variant="default">{headline}</Badge>
           )}
+
+          <Button
+            variant={historyOpen ? "subtle" : "ghost"}
+            size="sm"
+            onClick={() => setHistoryOpen((open) => !open)}
+            aria-pressed={historyOpen}
+          >
+            <History />
+            History
+            {document.revision_count > 0 ? (
+              <span className="tabular text-muted-foreground">{document.revision_count}</span>
+            ) : null}
+          </Button>
 
           <ShareDialog
             document={document}
@@ -217,7 +240,9 @@ export function DocumentEditor({ initial }: { initial: DocumentDetail }) {
         </div>
       </div>
 
-      <HistoryPanel document={document} readOnly={readOnly} onRestored={setDocument} />
+      {historyOpen ? (
+        <HistoryPanel document={document} readOnly={readOnly} onRestored={setDocument} />
+      ) : null}
 
       <CommitDialog
         open={commitOpen}

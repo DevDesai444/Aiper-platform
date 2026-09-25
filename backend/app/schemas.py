@@ -149,6 +149,10 @@ class ChatRequest(BaseModel):
     message: str
     mode: Mode = "document_generation"
     session_id: uuid.UUID | None = None
+    # Scopes a new conversation to a project, so that anything the agent writes
+    # lands there. Ignored when resuming an existing session, whose project is
+    # already settled.
+    project_id: uuid.UUID | None = None
     attachment_ids: list[uuid.UUID] = Field(default_factory=list)
     target_attachment_id: uuid.UUID | None = None
     template_key: str | None = None
