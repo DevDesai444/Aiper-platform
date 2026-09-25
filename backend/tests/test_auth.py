@@ -42,7 +42,9 @@ async def _count_users(session_factory) -> int:
 @pytest.mark.asyncio
 async def test_valid_token_provisions_user_once(client, session_factory, supabase_configured):
     sub = uuid.uuid4()
-    token = mint_hs256(sub=sub, email="Alice@Example.com", full_name="Alice Doe")
+    token = mint_hs256(
+        sub=sub, email="Alice@Example.com", full_name="Alice Doe", organisation="ESA"
+    )
 
     r1 = await client.get(ME, headers=_bearer(token))
     assert r1.status_code == 200, r1.text
@@ -50,6 +52,7 @@ async def test_valid_token_provisions_user_once(client, session_factory, supabas
     assert body["id"] == str(sub)
     assert body["email"] == "alice@example.com"  # normalised to lowercase
     assert body["full_name"] == "Alice Doe"
+    assert body["organisation"] == "ESA"  # from user_metadata at first-sight provision
     assert await _count_users(session_factory) == 1
 
     # Second call with the same token loads the existing row — no duplicate insert.

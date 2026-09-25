@@ -105,12 +105,20 @@ def _full_name_from_claims(claims: dict[str, Any]) -> str:
     return str(metadata.get("full_name") or metadata.get("name") or "")
 
 
+def _organisation_from_claims(claims: dict[str, Any]) -> str:
+    metadata = claims.get("user_metadata") or {}
+    if not isinstance(metadata, dict):
+        return ""
+    return str(metadata.get("organisation") or metadata.get("org") or "")
+
+
 async def _provision_from_claims(db: AsyncSession, claims: dict[str, Any]) -> User:
     """Load — or, on first sight, create — the local user for a verified token.
 
-    The local row mirrors the Supabase identity: ``id`` is the token ``sub``,
-    email/full_name come from the token, and ``hashed_password`` is empty because
-    the backend never holds credentials for Supabase-managed accounts.
+    The local row mirrors the Supabase identity: ``id`` is the token ``sub``, and
+    email/full_name/organisation come from the token (the frontend sends full_name
+    and organisation as Supabase user_metadata at sign-up). ``hashed_password`` is
+    empty because the backend never holds credentials for Supabase-managed accounts.
 
     Under row-level security both halves are the narrowest possible operations:
     the SELECT can only ever see the caller's own row, and the INSERT policy
@@ -123,18 +131,19 @@ async def _provision_from_claims(db: AsyncSession, claims: dict[str, Any]) -> Us
 
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if user is None:
-        # users.org_id is NOT NULL: an account has to land in a tenant. A
-        # Supabase token carries no organisation claim, so a freshly provisioned
-        # account joins the catch-all organisation, exactly as an account with a
-        # blank organisation string does. Moving somebody to the right tenant is
-        # a deliberate act, not something to guess from a token.
+        # users.org_id is NOT NULL (E2's tenancy): a freshly provisioned account
+        # joins the catch-all organisation here — tenant assignment is a deliberate
+        # act owned by E2. The `organisation` display string is filled from the
+        # token's user_metadata, which the frontend now sends at sign-up. (Follow-up
+        # for E2: org_id could be routed through ensure_organisation() on that same
+        # claim, mirroring the legacy register flow — flagged in the PR.)
         org = await ensure_organisation(db, "")
         user = User(
             id=user_id,
             email=(claims.get("email") or "").lower(),
             full_name=_full_name_from_claims(claims),
             org_id=org.id,
-            organisation="",
+            organisation=_organisation_from_claims(claims),
             hashed_password="",  # Supabase owns the credential; we store none.
             is_active=True,
         )
