@@ -37,3 +37,6 @@ python-docx==1.2.0
 # auth (E1)
 # Supabase JWT verification needs RS256/ES256 support -> the [crypto] extra
 PyJWT[crypto]==2.15.0
+
+# tenancy (E2)
+alembic==1.20.0

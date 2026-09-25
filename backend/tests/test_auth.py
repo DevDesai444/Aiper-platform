@@ -12,6 +12,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.db.models import User
+from app.services.organisations import ensure_organisation
 from tests.conftest import (
     TEST_AUDIENCE,
     TEST_ISSUER,
@@ -137,11 +138,15 @@ async def test_missing_authorization_header_is_401(client, supabase_configured):
 async def test_inactive_user_is_403(client, session_factory, supabase_configured):
     sub = uuid.uuid4()
     async with session_factory() as s:
+        # users.org_id is NOT NULL since the tenancy migration: an account has
+        # to belong to an organisation, so place this one in the catch-all.
+        org = await ensure_organisation(s, "")
         s.add(
             User(
                 id=sub,
                 email="inactive@example.com",
                 full_name="Inactive",
+                org_id=org.id,
                 organisation="",
                 hashed_password="",
                 is_active=False,

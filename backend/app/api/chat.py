@@ -180,7 +180,10 @@ async def _resolve_session(
     # The first user message becomes the conversation title.
     title = payload.message.strip().splitlines()[0][:120] if payload.message.strip() else ""
     session = ChatSession(
-        owner_id=user.id, title=title or "New conversation", mode=payload.mode
+        owner_id=user.id,
+        org_id=user.org_id,
+        title=title or "New conversation",
+        mode=payload.mode,
     )
     db.add(session)
     await db.commit()

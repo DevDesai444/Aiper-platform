@@ -19,12 +19,20 @@ from app.core.deps import CurrentUser, DbSession
 from app.db.models import (
     Document,
     DocumentCollaborator,
+    Project,
     Revision,
     RevisionDiff,
     User,
 )
 from app.services.diff import diff_text
 from app.services.documents import empty_document, markdown_to_tiptap, tiptap_to_text
+from app.services.permissions import (
+    access_expression,
+    grant_access,
+    require_access,
+    revoke_access,
+)
+from app.services.tree import ensure_default_project, resolve_folder
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -34,20 +42,16 @@ Access = Literal["owner", "editor", "viewer"]
 # ───────────────────────────── access control ─────────────────────────────
 
 
-async def resolve_access(db: AsyncSession, document: Document, user: User) -> Access:
-    if document.owner_id == user.id:
-        return "owner"
-    share = (
-        await db.execute(
-            select(DocumentCollaborator).where(
-                DocumentCollaborator.document_id == document.id,
-                DocumentCollaborator.email == user.email,
-            )
-        )
-    ).scalar_one_or_none()
-    if share is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
-    return "viewer" if share.role == "viewer" else "editor"
+async def resolve_access(
+    db: AsyncSession, document_id: uuid.UUID, user: User, required: Access = "viewer"
+) -> Access:
+    """Authorise against the SQL resolver.
+
+    Ownership and shares are no longer read here: both are expressed as rows
+    in access_grants, and the resolver decides. A document the caller cannot
+    reach is reported as missing, never as forbidden.
+    """
+    return await require_access(db, user, "document", document_id, required)
 
 
 async def _load(db: AsyncSession, document_id: uuid.UUID) -> Document:
@@ -96,6 +100,8 @@ async def _detail(db: AsyncSession, document: Document, access: Access) -> schem
         updated_at=document.updated_at,
         access=access,
         owner_email=owner_email,
+        project_id=document.project_id,
+        folder_id=document.folder_id,
         content_json=document.content_json or empty_document(),
         revisions=[_revision_out(r) for r in revisions],
         collaborators=[
@@ -154,59 +160,93 @@ async def _commit(
 
 @router.get("", response_model=list[schemas.DocumentOut])
 async def list_documents(user: CurrentUser, db: DbSession) -> list[schemas.DocumentOut]:
-    owned = (
-        (await db.execute(select(Document).where(Document.owner_id == user.id))).scalars().all()
-    )
-    shared_ids = (
-        (
-            await db.execute(
-                select(DocumentCollaborator.document_id).where(
-                    DocumentCollaborator.email == user.email
-                )
-            )
+    """Every document the caller can reach, whatever grant reaches it."""
+    access = access_expression("document", Document.id, user.id)
+    rows = (
+        await db.execute(
+            select(Document, access.label("access"), User.email)
+            .join(User, User.id == Document.owner_id)
+            # Index-friendly pre-filter; the resolver is the boundary.
+            .where(Document.org_id == user.org_id, access.is_not(None))
+            .order_by(Document.updated_at.desc())
         )
-        .scalars()
-        .all()
-    )
-    shared = (
-        (await db.execute(select(Document).where(Document.id.in_(shared_ids)))).scalars().all()
-        if shared_ids
-        else []
-    )
-
-    out = [
+    ).all()
+    return [
         schemas.DocumentOut(
-            id=d.id,
-            title=d.title,
-            revision_count=d.revision_count,
-            created_at=d.created_at,
-            updated_at=d.updated_at,
-            access="owner",
-            owner_email=user.email,
+            id=document.id,
+            title=document.title,
+            revision_count=document.revision_count,
+            created_at=document.created_at,
+            updated_at=document.updated_at,
+            access=role,
+            owner_email=owner_email,
+            project_id=document.project_id,
+            folder_id=document.folder_id,
         )
-        for d in owned
-    ] + [
-        schemas.DocumentOut(
-            id=d.id,
-            title=d.title,
-            revision_count=d.revision_count,
-            created_at=d.created_at,
-            updated_at=d.updated_at,
-            access="shared",
-            owner_email="",
-        )
-        for d in shared
+        for document, role, owner_email in rows
     ]
-    return sorted(out, key=lambda d: d.updated_at, reverse=True)
+
+
+async def _new_document(
+    db: AsyncSession,
+    *,
+    user: User,
+    title: str,
+    project_id: uuid.UUID | None,
+    folder_id: uuid.UUID | None,
+) -> Document:
+    """Place a document in the tree, authorising where it is being placed.
+
+    Editor access to the destination is required — on the folder when one is
+    given, otherwise on the project — and the creator becomes the document's
+    owner.
+    """
+    if project_id is None:
+        project = await ensure_default_project(db, user)
+        project_id = project.id
+
+    folder = await resolve_folder(db, project_id, folder_id)
+    if folder is not None:
+        await require_access(db, user, "folder", folder.id, "editor")
+    else:
+        await require_access(db, user, "project", project_id, "editor")
+
+    org_id = (
+        await db.execute(select(Project.org_id).where(Project.id == project_id))
+    ).scalar_one()
+
+    document = Document(
+        owner_id=user.id,
+        org_id=org_id,
+        project_id=project_id,
+        folder_id=folder.id if folder else None,
+        title=title,
+    )
+    db.add(document)
+    await db.flush()
+    await grant_access(
+        db,
+        org_id=org_id,
+        subject_type="document",
+        subject_id=document.id,
+        user_id=user.id,
+        role="owner",
+        granted_by=user.id,
+    )
+    return document
 
 
 @router.post("", response_model=schemas.DocumentDetail, status_code=status.HTTP_201_CREATED)
 async def create_document(
     payload: schemas.DocumentCreate, user: CurrentUser, db: DbSession
 ) -> schemas.DocumentDetail:
-    document = Document(owner_id=user.id, title=payload.title)
-    db.add(document)
-    await db.flush()
+    document = await _new_document(
+        db,
+        user=user,
+        title=payload.title,
+        project_id=payload.project_id,
+        folder_id=payload.folder_id,
+    )
     await _commit(
         db,
         document=document,
@@ -226,9 +266,13 @@ async def create_from_markdown(
     payload: schemas.DocumentFromMarkdown, user: CurrentUser, db: DbSession
 ) -> schemas.DocumentDetail:
     """The agent's way into version control — first revision is source='agent'."""
-    document = Document(owner_id=user.id, title=payload.title)
-    db.add(document)
-    await db.flush()
+    document = await _new_document(
+        db,
+        user=user,
+        title=payload.title,
+        project_id=payload.project_id,
+        folder_id=payload.folder_id,
+    )
     await _commit(
         db,
         document=document,
@@ -245,19 +289,16 @@ async def create_from_markdown(
 async def get_document(
     document_id: uuid.UUID, user: CurrentUser, db: DbSession
 ) -> schemas.DocumentDetail:
-    document = await _load(db, document_id)
-    access = await resolve_access(db, document, user)
-    return await _detail(db, document, access)
+    access = await resolve_access(db, document_id, user, "viewer")
+    return await _detail(db, await _load(db, document_id), access)
 
 
 @router.patch("/{document_id}", response_model=schemas.DocumentOut)
 async def rename_document(
     document_id: uuid.UUID, payload: schemas.TitleUpdate, user: CurrentUser, db: DbSession
 ) -> Document:
+    await resolve_access(db, document_id, user, "editor")
     document = await _load(db, document_id)
-    access = await resolve_access(db, document, user)
-    if access == "viewer":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Read-only access")
     document.title = payload.title
     await db.commit()
     await db.refresh(document)
@@ -266,9 +307,8 @@ async def rename_document(
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
 async def delete_document(document_id: uuid.UUID, user: CurrentUser, db: DbSession) -> None:
+    await resolve_access(db, document_id, user, "owner")
     document = await _load(db, document_id)
-    if document.owner_id != user.id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the owner can delete a document")
     await db.delete(document)
     await db.commit()
 
@@ -277,10 +317,8 @@ async def delete_document(document_id: uuid.UUID, user: CurrentUser, db: DbSessi
 async def commit(
     document_id: uuid.UUID, payload: schemas.CommitCreate, user: CurrentUser, db: DbSession
 ) -> schemas.DocumentDetail:
+    access = await resolve_access(db, document_id, user, "editor")
     document = await _load(db, document_id)
-    access = await resolve_access(db, document, user)
-    if access == "viewer":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Read-only access")
 
     await _commit(
         db,
@@ -298,8 +336,8 @@ async def commit(
 async def get_diff(
     document_id: uuid.UUID, revision_id: uuid.UUID, user: CurrentUser, db: DbSession
 ) -> schemas.DiffOut:
+    await resolve_access(db, document_id, user, "viewer")
     document = await _load(db, document_id)
-    await resolve_access(db, document, user)
     revision = next((r for r in document.revisions if r.id == revision_id), None)
     if revision is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Revision not found")
@@ -319,10 +357,8 @@ async def restore(
     document_id: uuid.UUID, revision_id: uuid.UUID, user: CurrentUser, db: DbSession
 ) -> schemas.DocumentDetail:
     """Restoring adds a commit. Nothing is ever erased."""
+    access = await resolve_access(db, document_id, user, "editor")
     document = await _load(db, document_id)
-    access = await resolve_access(db, document, user)
-    if access == "viewer":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Read-only access")
 
     revision = next((r for r in document.revisions if r.id == revision_id), None)
     if revision is None:
@@ -356,9 +392,8 @@ async def add_collaborator(
     An existing account is linked immediately; anyone else is stored as pending
     and claimed when they register.
     """
+    await resolve_access(db, document_id, user, "owner")
     document = await _load(db, document_id)
-    if document.owner_id != user.id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the owner can share a document")
 
     email = payload.email.lower()
     if email == user.email:
@@ -375,6 +410,22 @@ async def add_collaborator(
         invite_status="accepted" if invitee else "pending",
     )
     db.add(share)
+
+    # A share is only access once it is a grant — the resolver reads grants,
+    # not this table. Pending invitations have no account to grant to yet, and
+    # an invitee from another organisation cannot be granted anything: the
+    # boundary is absolute, and a grant written across it would be inert.
+    if invitee is not None and invitee.org_id == document.org_id:
+        await grant_access(
+            db,
+            org_id=document.org_id,
+            subject_type="document",
+            subject_id=document.id,
+            user_id=invitee.id,
+            role=payload.role,
+            granted_by=user.id,
+        )
+
     await db.commit()
     await db.refresh(share)
     return share
@@ -386,11 +437,14 @@ async def add_collaborator(
 async def remove_collaborator(
     document_id: uuid.UUID, collaborator_id: uuid.UUID, user: CurrentUser, db: DbSession
 ) -> None:
+    await resolve_access(db, document_id, user, "owner")
     document = await _load(db, document_id)
-    if document.owner_id != user.id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the owner can manage sharing")
     share = next((c for c in document.collaborators if c.id == collaborator_id), None)
     if share is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Collaborator not found")
+    if share.user_id is not None:
+        await revoke_access(
+            db, subject_type="document", subject_id=document.id, user_id=share.user_id
+        )
     await db.delete(share)
     await db.commit()

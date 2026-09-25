@@ -1,21 +1,22 @@
-"""Relational model: accounts, sources, conversations and the revision graph."""
+"""Relational model: tenancy, accounts, sources, conversations and the revision graph."""
 
 from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ENUM, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -36,6 +37,112 @@ class TimestampMixin:
     )
 
 
+# ──────────────────────────────── tenancy ─────────────────────────────────
+#
+# organisation -> project -> folder (nested) -> document.
+#
+# Access is granted per subject and cascades downward; the organisation
+# boundary is absolute. Nothing here decides access: the one authority is the
+# SQL function aiper_effective_access (migration 0002), called through
+# app.services.permissions.
+
+SubjectType = Literal["project", "folder", "document"]
+Role = Literal["owner", "editor", "viewer"]
+
+# create_type=False: the types are created by migration 0002, not by the mapper.
+subject_enum = ENUM("project", "folder", "document", name="aiper_subject", create_type=False)
+role_enum = ENUM("owner", "editor", "viewer", name="aiper_role", create_type=False)
+
+
+class Organisation(Base, TimestampMixin):
+    """A tenant. Users of one organisation share a database, nothing else."""
+
+    __tablename__ = "organisations"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(160))
+    slug: Mapped[str] = mapped_column(String(160), unique=True)
+
+    users: Mapped[list[User]] = relationship(back_populates="org")
+    projects: Mapped[list[Project]] = relationship(back_populates="org")
+
+
+class Project(Base, TimestampMixin):
+    __tablename__ = "projects"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organisations.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(Text, server_default="", default="")
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    org: Mapped[Organisation] = relationship(back_populates="projects")
+    folders: Mapped[list[Folder]] = relationship(back_populates="project")
+
+
+class Folder(Base, TimestampMixin):
+    """A node in a project's tree. Deleting one deletes the subtree below it."""
+
+    __tablename__ = "folders"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    # That a parent belongs to the same project as its child is a service-layer
+    # invariant (app.services.tree); the resolver additionally refuses to walk
+    # out of the project, so a bad parent cannot carry access across the tree.
+    parent_folder_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("folders.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(200))
+
+    project: Mapped[Project] = relationship(back_populates="folders")
+    children: Mapped[list[Folder]] = relationship(
+        back_populates="parent", cascade="all, delete-orphan"
+    )
+    parent: Mapped[Folder | None] = relationship(
+        back_populates="children", remote_side="Folder.id"
+    )
+
+
+class AccessGrant(Base):
+    """One subject, one user, one role. The unit the resolver reads.
+
+    Polymorphic on purpose: one table for three subject kinds keeps the
+    resolver a single query. subject_id therefore carries no foreign key, so
+    deleting a subject leaves an inert row behind — the resolver joins through
+    the real tables, and an orphan grants nothing.
+    """
+
+    __tablename__ = "access_grants"
+    __table_args__ = (
+        UniqueConstraint(
+            "subject_type", "subject_id", "user_id", name="uq_access_grants_subject_user"
+        ),
+        Index("ix_access_grants_subject", "subject_type", "subject_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organisations.id", ondelete="CASCADE"))
+    subject_type: Mapped[SubjectType] = mapped_column(subject_enum)
+    subject_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[Role] = mapped_column(role_enum)
+    granted_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    user: Mapped[User] = relationship(foreign_keys=[user_id])
+
+
 # ──────────────────────────────── identity ────────────────────────────────
 
 
@@ -45,9 +152,14 @@ class User(Base, TimestampMixin):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     full_name: Mapped[str] = mapped_column(String(160), default="")
+    # The tenant. `organisation` below is the legacy free-text string kept for
+    # the registration payload and /auth/me; org_id is what access keys off.
+    org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organisations.id"), index=True)
     organisation: Mapped[str] = mapped_column(String(160), default="")
     hashed_password: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    org: Mapped[Organisation] = relationship(back_populates="users")
 
 
 # ──────────────────────────────── sources ─────────────────────────────────
@@ -61,6 +173,12 @@ class FileAsset(Base, TimestampMixin):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     owner_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organisations.id", ondelete="CASCADE"), index=True
+    )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
     )
     session_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("chat_sessions.id", ondelete="SET NULL"), nullable=True, index=True
@@ -103,6 +221,12 @@ class ChatSession(Base, TimestampMixin):
     owner_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organisations.id", ondelete="CASCADE"), index=True
+    )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     title: Mapped[str] = mapped_column(String(300), default="New conversation")
     mode: Mapped[str] = mapped_column(String(32), default="document_generation")
 
@@ -139,6 +263,17 @@ class Document(Base, TimestampMixin):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     owner_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organisations.id", ondelete="CASCADE"), index=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    # NULL means the project root. A deleted folder leaves its documents there
+    # rather than destroying them.
+    folder_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("folders.id", ondelete="SET NULL"), nullable=True, index=True
     )
     title: Mapped[str] = mapped_column(String(300), default="Untitled document")
     content_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)

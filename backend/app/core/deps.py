@@ -27,6 +27,7 @@ from app.core.security import decode_access_token
 from app.core.supabase_auth import AuthError, verify_supabase_jwt
 from app.db.base import get_session
 from app.db.models import User
+from app.services.organisations import ensure_organisation
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -61,10 +62,17 @@ async def _provision_from_claims(db: AsyncSession, claims: dict[str, Any]) -> Us
 
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if user is None:
+        # users.org_id is NOT NULL: an account has to land in a tenant. A
+        # Supabase token carries no organisation claim, so a freshly provisioned
+        # account joins the catch-all organisation, exactly as an account with a
+        # blank organisation string does. Moving somebody to the right tenant is
+        # a deliberate act, not something to guess from a token.
+        org = await ensure_organisation(db, "")
         user = User(
             id=user_id,
             email=(claims.get("email") or "").lower(),
             full_name=_full_name_from_claims(claims),
+            org_id=org.id,
             organisation="",
             hashed_password="",  # Supabase owns the credential; we store none.
             is_active=True,

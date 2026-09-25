@@ -19,8 +19,11 @@ Everything runs in Docker. Nothing is installed on the host.
 4. [How it works](#how-it-works)
 5. [Mock backend](#mock-backend)
 6. [Repository layout](#repository-layout)
-7. [Configuration reference](#configuration-reference)
-8. [Known constraints](#known-constraints)
+7. [Tenancy and access](#tenancy-and-access)
+8. [Database migrations](#database-migrations)
+9. [Tests](#tests)
+10. [Configuration reference](#configuration-reference)
+11. [Known constraints](#known-constraints)
 
 ---
 
@@ -505,6 +508,22 @@ aiper/
 ├── backend/                      FastAPI · LangChain · deepagents
 │   ├── Dockerfile
 │   ├── requirements.txt
+│   ├── requirements-dev.txt      test-only deps, kept out of the image
+│   ├── entrypoint.sh             alembic upgrade head, then uvicorn
+│   ├── alembic.ini
+│   ├── alembic/                  migrations own the schema
+│   │   ├── env.py                async engine, URL resolved from settings or env
+│   │   └── versions/
+│   │       ├── 0001_baseline_schema.py   snapshot of the pre-tenancy models
+│   │       └── 0002_tenancy.py           the tree, grants, and the resolver
+│   ├── tests/                    pytest, against a real PostgreSQL
+│   │   ├── conftest.py           throwaway migrated database + auth fixtures
+│   │   ├── factories.py          builders for the tenancy tree
+│   │   ├── test_permissions.py   the resolver
+│   │   ├── test_routes.py        404-vs-403 on the wire
+│   │   ├── test_migration_backfill.py  0001 → 0002 over legacy rows
+│   │   ├── test_auth.py          Supabase verification + legacy login
+│   │   └── test_health.py        /health without a database
 │   ├── skills/                   deepagents skills, one SKILL.md per directory
 │   │   ├── document_generation/
 │   │   ├── feature_comparison/
@@ -516,6 +535,7 @@ aiper/
 │       ├── api/
 │       │   ├── router.py         /api/v1
 │       │   ├── auth.py           register · login · me  (+ claims pending shares)
+│       │   ├── projects.py       projects · folders · tree
 │       │   ├── files.py          upload → parse → embed → Qdrant, inline
 │       │   ├── templates.py      the built-in six, plus per-workspace additions
 │       │   ├── chat.py           conversations and the SSE turn
@@ -530,6 +550,9 @@ aiper/
 │       │   ├── loaders.py        one page = one chunk, per format
 │       │   └── store.py          Qdrant; every query pinned to owner_id
 │       ├── services/
+│       │   ├── permissions.py    the resolver's Python face: 404 vs 403
+│       │   ├── tree.py           default project, same-project folder invariant
+│       │   ├── organisations.py  free-text organisation name → tenant row
 │       │   ├── diff.py           block diff with modify-pairing and collapsing
 │       │   ├── documents.py      Markdown ⇄ TipTap, and the flatten the diff runs on
 │       │   ├── templates.py      the six pre-seeded templates
@@ -538,8 +561,8 @@ aiper/
 │       │   ├── security.py       bcrypt + JWT
 │       │   └── deps.py           DbSession, CurrentUser
 │       └── db/
-│           ├── base.py           async engine, session factory, init_db
-│           └── models.py         users · files · templates · chat · documents · revisions
+│           ├── base.py           async engine, session factory, verify_schema
+│           └── models.py         orgs · projects · folders · grants · users · files · chat · documents · revisions
 │
 ├── mock/                         same contract, in-memory, scripted agent
 │   ├── README.md                 what is real and what is simulated
@@ -571,6 +594,103 @@ aiper/
         ├── markdown.tsx          renderer with citation and verdict chips
         └── types.ts              one set of types for the whole contract
 ```
+
+---
+
+## Tenancy and access
+
+The hierarchy is **organisation → project → folder (nested) → document**.
+Users of one organisation share a database and nothing else.
+
+Access is *granted*, per subject, and *cascades downward*. A grant on a project
+reaches every folder and document inside it; a grant on a folder reaches its
+subfolders and their documents; a grant on a document reaches only that
+document. Where several grants apply the most generous wins — `owner` over
+`editor` over `viewer`. Nothing cascades upward or sideways.
+
+The organisation boundary is absolute. A user whose organisation differs from
+the subject's gets no access at all, whatever grants exist, so a grant row
+written across organisations is inert rather than dangerous.
+
+One function decides all of this:
+
+```sql
+aiper_effective_access(user uuid, subject aiper_subject, subject_id uuid) -> aiper_role
+```
+
+It lives in migration `0002`, is `STABLE` and `SECURITY DEFINER`, and is the
+only place the rule is written down. `app/services/permissions.py` calls it and
+turns the answer into HTTP; no route reimplements the cascade. Two
+implementations of an access rule eventually disagree, and the disagreement is
+the vulnerability.
+
+On the wire that means:
+
+| Situation | Response |
+| --- | --- |
+| No access at all | `404` — indistinguishable from a subject that does not exist |
+| Access, but the role is too low | `403` |
+
+The 404 is deliberate. `403 Forbidden` on a document the caller cannot reach
+confirms that it exists, and in a shared database that leaks the contents of
+another organisation.
+
+---
+
+## Database migrations
+
+The schema is owned by Alembic. The application no longer calls `create_all`:
+`app.db.base.verify_schema` refuses to serve a database with no revision
+stamped, and `backend/entrypoint.sh` runs the upgrade before uvicorn.
+
+```bash
+docker compose up -d postgres
+cd backend
+alembic upgrade head
+```
+
+The database URL is resolved in `alembic/env.py`, so one code path serves the
+container, a laptop and CI. In order of precedence:
+
+1. `alembic -x db_url=postgresql+asyncpg://...`
+2. `$ALEMBIC_DATABASE_URL`
+3. `settings.database_url` (itself overridable with `$DATABASE_URL`)
+
+`0001` is an exact snapshot of the pre-tenancy models, so a database that
+already matches it should be stamped rather than upgraded:
+
+```bash
+alembic stamp 0001 && alembic upgrade head
+```
+
+`0002` backfills as it goes, so existing data survives: users are grouped into
+organisations by their free-text `organisation` string, every document owner
+gets a `Workspace` project holding their documents, and owners keep
+owner-level access as explicit grants.
+
+---
+
+## Tests
+
+The suite is deliberately database-backed: the access resolver is a SQL
+function, so testing it against a stand-in would test something else. Each run
+creates its own database, migrates it with the real `alembic upgrade head` —
+which puts the migrations themselves under test — and drops it afterwards.
+The schema comes from migrations rather than `create_all` for the same reason:
+`create_all` cannot create a SQL function, so it would silently leave the
+resolver out.
+
+```bash
+docker compose up -d postgres
+pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+pytest backend/tests
+```
+
+pytest is configured in the root `pyproject.toml`, so run it from the repository
+root, as CI does. `TEST_DATABASE_URL` selects the server and defaults to
+`postgresql+asyncpg://aiper_user:aiper_password@localhost:5432/aiper_db`, so on a
+standard compose stack it needs no environment at all. The database name in that
+DSN is only used to reach the server; the tests never touch it.
 
 ---
 

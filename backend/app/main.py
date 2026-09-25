@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from app.api.router import api_router
 from app.config import settings
 from app.core.startup import ensure_auth_configured
-from app.db.base import init_db
+from app.db.base import verify_schema
 from app.rag.store import ensure_collection
 from app.services.seed import seed_templates
 
@@ -25,7 +25,8 @@ async def lifespan(app: FastAPI):
     ensure_auth_configured()
 
     settings.check_production_secrets()
-    await init_db()
+    # The schema belongs to Alembic; the entrypoint migrates before we serve.
+    await verify_schema()
     await seed_templates()
     try:
         await ensure_collection()
