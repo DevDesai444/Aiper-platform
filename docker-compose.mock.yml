@@ -11,6 +11,9 @@ services:
     environment:
       CORS_ORIGINS: http://localhost:3000
       STORAGE_DIR: /data/uploads
+      # Parity with docker-compose.yml: legacy dev/demo login enabled. (The mock
+      # backend is scripted and does not enforce auth, but keep the flag aligned.)
+      AUTH_LEGACY_LOGIN_ENABLED: "1"
     ports:
       - "8000:8000"
     volumes:
