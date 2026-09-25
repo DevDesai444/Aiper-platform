@@ -31,3 +31,8 @@ qdrant-client
 pypdf
 python-pptx
 python-docx
+
+# auth (E1)
+# Supabase JWT verification needs RS256/ES256 support -> the [crypto] extra
+# (pulls in `cryptography`). Supersedes the plain PyJWT pin above.
+PyJWT[crypto]

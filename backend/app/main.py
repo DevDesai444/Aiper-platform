@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
 from app.config import settings
+from app.core.startup import ensure_auth_configured
 from app.db.base import init_db
 from app.rag.store import ensure_collection
 from app.services.seed import seed_templates
@@ -14,6 +15,10 @@ from app.services.seed import seed_templates
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Fail closed: refuse to serve unless an authentication mode is configured
+    # (Supabase for production, or the legacy dev/demo login flag).
+    ensure_auth_configured()
+
     await init_db()
     await seed_templates()
     try:
