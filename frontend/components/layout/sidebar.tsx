@@ -1,30 +1,10 @@
 "use client";
 
-import {
-  ChevronsUpDown,
-  FolderKanban,
-  LogOut,
-  MessagesSquare,
-  Plus,
-  Settings,
-} from "lucide-react";
+import { FolderKanban, MessagesSquare, Plus, Settings } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { Wordmark } from "@/components/layout/logo";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { useAuth } from "@/lib/auth";
-import { cn, initials } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace";
 
 const NAV = [
@@ -33,25 +13,17 @@ const NAV = [
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
+/**
+ * Navigation and the conversation list. The brand mark and the account menu
+ * live in the app-wide top bar now — this is nav only, no duplicate identity.
+ */
 export function Sidebar() {
   const pathname = usePathname();
-  const { user, health, signOut } = useAuth();
   const { sessions } = useWorkspace();
 
   return (
     <aside className="flex w-[248px] shrink-0 flex-col border-r border-border bg-surface-sunken">
-      <div className="flex h-14 items-center justify-between px-4">
-        <Link href="/projects" className="rounded-md">
-          <Wordmark />
-        </Link>
-        {health?.mock ? (
-          <Badge variant="warning" title="Serving the scripted mock backend">
-            mock
-          </Badge>
-        ) : null}
-      </div>
-
-      <nav className="space-y-0.5 px-2">
+      <nav className="space-y-0.5 px-2 pt-3">
         {NAV.map(({ href, label, icon: Icon }) => {
           const active = pathname === href || pathname.startsWith(`${href}/`);
           return (
@@ -77,11 +49,13 @@ export function Sidebar() {
           <span className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
             Conversations
           </span>
-          <Button asChild variant="ghost" size="icon-sm" title="New conversation">
-            <Link href="/chat">
-              <Plus />
-            </Link>
-          </Button>
+          <Link
+            href="/chat"
+            title="New conversation"
+            className="flex size-7 shrink-0 items-center justify-center rounded transition-colors hover:bg-accent"
+          >
+            <Plus className="size-4 text-muted-foreground" />
+          </Link>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
@@ -120,44 +94,6 @@ export function Sidebar() {
             </ul>
           )}
         </div>
-      </div>
-
-      <div className="border-t border-border p-2">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent/60">
-              <Avatar>
-                <AvatarFallback>
-                  {initials(user?.full_name ?? "", user?.email ?? "a")}
-                </AvatarFallback>
-              </Avatar>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[0.8125rem] font-medium">
-                  {user?.full_name || user?.email?.split("@")[0] || "Account"}
-                </span>
-                <span className="block truncate text-2xs text-muted-foreground">
-                  {user?.email}
-                </span>
-              </span>
-              <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" side="top" className="w-[228px]">
-            <DropdownMenuLabel>{user?.organisation || "Workspace"}</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem asChild>
-              <Link href="/settings">
-                <Settings />
-                Settings
-              </Link>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem destructive onSelect={signOut}>
-              <LogOut />
-              Sign out
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
       </div>
     </aside>
   );

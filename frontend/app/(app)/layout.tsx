@@ -5,6 +5,7 @@ import { useEffect } from "react";
 
 import { Logo } from "@/components/layout/logo";
 import { Sidebar } from "@/components/layout/sidebar";
+import { TopBar } from "@/components/layout/top-bar";
 import { useAuth } from "@/lib/auth";
 import { WorkspaceProvider } from "@/lib/workspace";
 
@@ -26,9 +27,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <WorkspaceProvider>
-      <div className="flex h-screen overflow-hidden">
-        <Sidebar />
-        <main className="flex min-w-0 flex-1 flex-col bg-background">{children}</main>
+      <div className="flex h-screen flex-col overflow-hidden">
+        <TopBar />
+        <div className="flex min-h-0 flex-1">
+          <Sidebar />
+          <main className="flex min-w-0 flex-1 flex-col bg-background">{children}</main>
+        </div>
       </div>
     </WorkspaceProvider>
   );

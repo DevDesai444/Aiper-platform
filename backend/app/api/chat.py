@@ -22,6 +22,7 @@ from app.db.base import user_scoped_session
 from app.db.models import ChatMessage, ChatSession, DocumentTemplate, FileAsset, User
 from app.rag.scope import accessible_files_clause
 from app.services.permissions import require_access
+from app.services.refs import resolve_ref
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -190,15 +191,19 @@ async def _resolve_session(
     # A conversation opened inside a project belongs to it. Viewer access is
     # enough to hold the conversation; writing a document into the project is
     # authorised separately, where the write happens.
+    project_id = None
     if payload.project_id is not None:
-        await require_access(db, user, "project", payload.project_id, "viewer")
+        project_id = await resolve_ref(db, "project", user.org_id, payload.project_id)
+        if project_id is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
+        await require_access(db, user, "project", project_id, "viewer")
 
     # The first user message becomes the conversation title.
     title = payload.message.strip().splitlines()[0][:120] if payload.message.strip() else ""
     session = ChatSession(
         owner_id=user.id,
         org_id=user.org_id,
-        project_id=payload.project_id,
+        project_id=project_id,
         title=title or "New conversation",
         mode=payload.mode,
     )

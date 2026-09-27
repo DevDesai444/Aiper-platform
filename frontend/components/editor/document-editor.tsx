@@ -37,6 +37,7 @@ import { ShareDialog } from "@/components/editor/share-dialog";
 import { EditorToolbar } from "@/components/editor/toolbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Dialog,
   DialogContent,
@@ -108,6 +109,8 @@ export function DocumentEditor({
   const [pendingImport, setPendingImport] = useState<File | null>(null);
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const readOnly = document.access === "viewer";
@@ -203,6 +206,7 @@ export function DocumentEditor({
   }, [document.id, document.title, refreshDocuments, title]);
 
   async function remove() {
+    setDeleting(true);
     try {
       await api.deleteDocument(document.id);
       await refreshDocuments();
@@ -211,6 +215,7 @@ export function DocumentEditor({
       toast.error("Could not delete the document", {
         description: error instanceof Error ? error.message : undefined,
       });
+      setDeleting(false);
     }
   }
 
@@ -431,7 +436,7 @@ export function DocumentEditor({
               {document.access === "owner" ? (
                 <>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem destructive onSelect={() => void remove()}>
+                  <DropdownMenuItem destructive onSelect={() => setDeleteConfirmOpen(true)}>
                     <Trash2 />
                     Delete document
                   </DropdownMenuItem>
@@ -515,6 +520,16 @@ export function DocumentEditor({
           setPendingImport(null);
           if (file) await applyImportedFile(file);
         }}
+      />
+
+      <ConfirmDialog
+        open={deleteConfirmOpen}
+        onOpenChange={setDeleteConfirmOpen}
+        title={`Delete ${document.title}?`}
+        description="This deletes the document and its entire revision history. This cannot be undone."
+        confirmLabel="Delete document"
+        pending={deleting}
+        onConfirm={() => void remove()}
       />
     </div>
   );

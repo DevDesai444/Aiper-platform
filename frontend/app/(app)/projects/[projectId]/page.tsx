@@ -1,48 +1,84 @@
 "use client";
 
-import { FolderPlus, MessagesSquare, Plus, Trash2 } from "lucide-react";
-import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import {
+  ChevronRight,
+  FilePlus,
+  FolderPlus,
+  MessagesSquare,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  Trash2,
+} from "lucide-react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { DocumentRow } from "@/components/projects/document-row";
+import { FolderCard } from "@/components/projects/folder-card";
+import type { MenuAction } from "@/components/projects/item-menu";
+import { MoveDialog } from "@/components/projects/move-dialog";
 import { NameDialog } from "@/components/projects/name-dialog";
-import { ProjectTreeView } from "@/components/projects/tree";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api } from "@/lib/api";
-import { extractId, idSlug } from "@/lib/slug";
-import type { Folder, ProjectTree } from "@/lib/types";
+import { extractRef, idSlug } from "@/lib/slug";
+import type { Folder, ProjectTree, TreeDocument } from "@/lib/types";
 import { useWorkspace } from "@/lib/workspace";
 
-type Pending =
-  | { kind: "folder"; parent: Folder | null }
-  | { kind: "document"; folder: Folder | null }
+type DialogState =
+  | { kind: "new-folder" }
+  | { kind: "new-document" }
+  | { kind: "rename-project" }
+  | { kind: "rename-folder"; folder: Folder }
+  | { kind: "rename-document"; document: TreeDocument }
+  | { kind: "move-folder"; folder: Folder }
+  | { kind: "move-document"; document: TreeDocument }
+  | { kind: "delete-project" }
+  | { kind: "delete-folder"; folder: Folder }
+  | { kind: "delete-document"; document: TreeDocument }
   | null;
+
+/** The chain of folders from the project root down to `folderId`, inclusive. */
+function ancestry(folders: Folder[], folderId: string | null): Folder[] {
+  const byId = new Map(folders.map((folder) => [folder.id, folder]));
+  const chain: Folder[] = [];
+  let current = folderId ? byId.get(folderId) : undefined;
+  // Bounded: a cycle in parent_folder_id must not hang the breadcrumb.
+  for (let depth = 0; current && depth < 50; depth += 1) {
+    chain.unshift(current);
+    current = current.parent_folder_id ? byId.get(current.parent_folder_id) : undefined;
+  }
+  return chain;
+}
 
 export default function ProjectPage() {
   const { projectId: rawParam } = useParams<{ projectId: string }>();
-  // The slug is cosmetic; the trailing uuid is what the API and the resolver
-  // ever see. A segment with no valid uuid tail is indistinguishable from a
-  // project the caller cannot reach — both render as "not found".
-  const projectId = extractId(rawParam);
+  const projectId = extractRef(rawParam);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const currentFolderId = searchParams.get("folder");
   const { refreshDocuments } = useWorkspace();
 
   const [tree, setTree] = useState<ProjectTree | null>(null);
   const [missing, setMissing] = useState(false);
-  const [pending, setPending] = useState<Pending>(null);
+  const [dialog, setDialog] = useState<DialogState>(null);
   const [busy, setBusy] = useState(false);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const load = useCallback(async () => {
     if (!projectId) {
@@ -72,12 +108,151 @@ export default function ProjectPage() {
   useEffect(() => {
     if (!projectId || !tree) return;
     const canonical = idSlug(tree.project?.name ?? "", projectId);
-    if (rawParam !== canonical) router.replace(`/projects/${canonical}`);
-  }, [projectId, rawParam, tree, router]);
+    if (rawParam !== canonical) {
+      const query = searchParams.toString();
+      router.replace(`/projects/${canonical}${query ? `?${query}` : ""}`);
+    }
+  }, [projectId, rawParam, tree, router, searchParams]);
 
   const canEdit = tree?.project?.access === "owner" || tree?.project?.access === "editor";
   const isOwner = tree?.project?.access === "owner";
-  const projectHref = projectId ? `/projects/${idSlug(tree?.project?.name ?? "", projectId)}` : "/projects";
+  const projectHref = projectId
+    ? `/projects/${idSlug(tree?.project?.name ?? "", projectId)}`
+    : "/projects";
+  const hrefForFolder = useCallback(
+    (folderId: string | null) => (folderId ? `${projectHref}?folder=${folderId}` : projectHref),
+    [projectHref],
+  );
+
+  const crumbs = useMemo(
+    () => (tree ? ancestry(tree.folders, currentFolderId) : []),
+    [tree, currentFolderId],
+  );
+  const currentFolder = crumbs.at(-1) ?? null;
+
+  const childFolders = useMemo(
+    () => (tree ? tree.folders.filter((f) => f.parent_folder_id === currentFolderId) : []),
+    [tree, currentFolderId],
+  );
+  const childDocuments = useMemo(
+    () => (tree ? tree.documents.filter((d) => d.folder_id === currentFolderId) : []),
+    [tree, currentFolderId],
+  );
+
+  async function createFolder(name: string) {
+    if (!projectId) return;
+    setBusy(true);
+    try {
+      await api.createFolder(projectId, { name, parent_folder_id: currentFolderId });
+      await load();
+      setDialog(null);
+    } catch (error) {
+      toast.error("Could not create the folder", {
+        description: error instanceof Error ? error.message : undefined,
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createDocument(title: string) {
+    if (!projectId) return;
+    setBusy(true);
+    try {
+      const document = await api.createDocument({
+        title,
+        project_id: projectId,
+        folder_id: currentFolderId,
+      });
+      await Promise.all([refreshDocuments(), load()]);
+      setDialog(null);
+      router.push(`${projectHref}/d/${idSlug(document.title, document.id)}`);
+    } catch (error) {
+      toast.error("Could not create the document", {
+        description: error instanceof Error ? error.message : undefined,
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function renameProject(name: string) {
+    if (!projectId) return;
+    setBusy(true);
+    try {
+      await api.renameProject(projectId, name);
+      await load();
+      setDialog(null);
+    } catch (error) {
+      toast.error("Could not rename the project", {
+        description: error instanceof Error ? error.message : undefined,
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function renameFolder(folder: Folder, name: string) {
+    if (!projectId) return;
+    setBusy(true);
+    try {
+      await api.renameFolder(projectId, folder.id, name);
+      await load();
+      setDialog(null);
+    } catch (error) {
+      toast.error("Could not rename the folder", {
+        description: error instanceof Error ? error.message : undefined,
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function renameDocumentRow(document: TreeDocument, title: string) {
+    setBusy(true);
+    try {
+      await api.renameDocument(document.id, title);
+      await Promise.all([refreshDocuments(), load()]);
+      setDialog(null);
+    } catch (error) {
+      toast.error("Could not rename the document", {
+        description: error instanceof Error ? error.message : undefined,
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function moveFolder(folder: Folder, destination: string | null) {
+    if (!projectId) return;
+    setBusy(true);
+    try {
+      await api.moveFolder(projectId, folder.id, destination);
+      await load();
+      setDialog(null);
+    } catch (error) {
+      toast.error("Could not move the folder", {
+        description: error instanceof Error ? error.message : undefined,
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function moveDocumentRow(document: TreeDocument, destination: string | null) {
+    setBusy(true);
+    try {
+      await api.moveDocument(document.id, destination);
+      await Promise.all([refreshDocuments(), load()]);
+      setDialog(null);
+    } catch (error) {
+      toast.error("Could not move the document", {
+        description: error instanceof Error ? error.message : undefined,
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function deleteProject() {
     if (!projectId) return;
@@ -95,15 +270,15 @@ export default function ProjectPage() {
     }
   }
 
-  async function createFolder(name: string, parent: Folder | null) {
+  async function deleteFolder(folder: Folder) {
     if (!projectId) return;
     setBusy(true);
     try {
-      await api.createFolder(projectId, { name, parent_folder_id: parent?.id ?? null });
-      await load();
-      setPending(null);
+      await api.deleteFolder(projectId, folder.id);
+      await Promise.all([refreshDocuments(), load()]);
+      setDialog(null);
     } catch (error) {
-      toast.error("Could not create the folder", {
+      toast.error("Could not delete the folder", {
         description: error instanceof Error ? error.message : undefined,
       });
     } finally {
@@ -111,25 +286,95 @@ export default function ProjectPage() {
     }
   }
 
-  async function createDocument(title: string, folder: Folder | null) {
-    if (!projectId) return;
+  async function deleteDocumentRow(document: TreeDocument) {
     setBusy(true);
     try {
-      const document = await api.createDocument({
-        title,
-        project_id: projectId,
-        folder_id: folder?.id ?? null,
-      });
+      await api.deleteDocument(document.id);
       await Promise.all([refreshDocuments(), load()]);
-      setPending(null);
-      router.push(`${projectHref}/documents/${idSlug(document.title, document.id)}`);
+      setDialog(null);
     } catch (error) {
-      toast.error("Could not create the document", {
+      toast.error("Could not delete the document", {
         description: error instanceof Error ? error.message : undefined,
       });
     } finally {
       setBusy(false);
     }
+  }
+
+  function folderActions(folder: Folder): MenuAction[] {
+    const actions: MenuAction[] = [
+      {
+        key: "open",
+        label: "Open",
+        icon: FolderPlus,
+        onSelect: () => router.push(hrefForFolder(folder.id)),
+      },
+    ];
+    if (canEdit) {
+      actions.push(
+        {
+          key: "rename",
+          label: "Rename",
+          icon: Pencil,
+          onSelect: () => setDialog({ kind: "rename-folder", folder }),
+        },
+        {
+          key: "move",
+          label: "Move to…",
+          icon: FolderPlus,
+          onSelect: () => setDialog({ kind: "move-folder", folder }),
+        },
+      );
+    }
+    if (isOwner) {
+      actions.push({
+        key: "delete",
+        label: "Delete",
+        icon: Trash2,
+        destructive: true,
+        onSelect: () => setDialog({ kind: "delete-folder", folder }),
+      });
+    }
+    return actions;
+  }
+
+  function documentActions(document: TreeDocument): MenuAction[] {
+    const actions: MenuAction[] = [
+      {
+        key: "open",
+        label: "Open",
+        icon: FilePlus,
+        onSelect: () => router.push(`${projectHref}/d/${idSlug(document.title, document.id)}`),
+      },
+    ];
+    if (canEdit) {
+      actions.push(
+        {
+          key: "rename",
+          label: "Rename",
+          icon: Pencil,
+          onSelect: () => setDialog({ kind: "rename-document", document }),
+        },
+        {
+          key: "move",
+          label: "Move to…",
+          icon: FolderPlus,
+          onSelect: () => setDialog({ kind: "move-document", document }),
+        },
+      );
+    }
+    // Document delete is owner-only server-side too, but per-document — a
+    // caller with editor-on-the-project can legitimately own some documents
+    // and not others, so the check is left to the request itself rather than
+    // gated here; a 403 on an occasional attempt is unusual enough to just report.
+    actions.push({
+      key: "delete",
+      label: "Delete",
+      icon: Trash2,
+      destructive: true,
+      onSelect: () => setDialog({ kind: "delete-document", document }),
+    });
+    return actions;
   }
 
   if (missing) {
@@ -141,7 +386,12 @@ export default function ProjectPage() {
             <p className="text-[0.8125rem] text-muted-foreground">
               This project does not exist, or there is nothing in it you can open.
             </p>
-            <Button className="mt-4" size="sm" variant="outline" onClick={() => router.push("/projects")}>
+            <Button
+              className="mt-4"
+              size="sm"
+              variant="outline"
+              onClick={() => router.push("/projects")}
+            >
               Back to projects
             </Button>
           </div>
@@ -163,15 +413,72 @@ export default function ProjectPage() {
     );
   }
 
+  const title = currentFolder?.name ?? tree.project?.name ?? "Shared with you";
+
   return (
     <>
       <PageHeader
-        title={tree.project?.name ?? "Shared with you"}
+        title={
+          <span className="flex items-center gap-1">
+            {title}
+            {isOwner && !currentFolder ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    aria-label="Project actions"
+                    className="rounded p-0.5 text-muted-foreground opacity-70 transition-opacity hover:bg-accent hover:opacity-100"
+                  >
+                    <MoreHorizontal className="size-3.5" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuItem onSelect={() => setDialog({ kind: "rename-project" })}>
+                    <Pencil />
+                    Rename project
+                  </DropdownMenuItem>
+                  <DropdownMenuItem destructive onSelect={() => setDialog({ kind: "delete-project" })}>
+                    <Trash2 />
+                    Delete project
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : null}
+          </span>
+        }
         description={
-          tree.project?.description ||
-          (tree.project
-            ? `${tree.folders.length} folder${tree.folders.length === 1 ? "" : "s"} · ${tree.documents.length} document${tree.documents.length === 1 ? "" : "s"}`
-            : "The folders and documents you have been given access to")
+          // A <p> is PageHeader's own wrapper for `description`, and <p> cannot
+          // contain block-level content — role="navigation" on a <span> keeps
+          // the breadcrumb landmark without the invalid <nav>-inside-<p> nesting.
+          <span
+            role="navigation"
+            aria-label="Breadcrumb"
+            className="flex items-center gap-1 overflow-x-auto"
+          >
+            <button
+              onClick={() => router.push(projectHref)}
+              className="shrink-0 transition-colors hover:text-foreground"
+            >
+              Projects
+            </button>
+            <ChevronRight className="size-3 shrink-0 opacity-50" />
+            <button
+              onClick={() => router.push(projectHref)}
+              className="shrink-0 transition-colors hover:text-foreground"
+            >
+              {tree.project?.name ?? "this project"}
+            </button>
+            {crumbs.map((folder) => (
+              <span key={folder.id} className="flex shrink-0 items-center gap-1">
+                <ChevronRight className="size-3 opacity-50" />
+                <button
+                  onClick={() => router.push(hrefForFolder(folder.id))}
+                  className="transition-colors hover:text-foreground"
+                >
+                  {folder.name}
+                </button>
+              </span>
+            ))}
+          </span>
         }
         actions={
           <>
@@ -189,104 +496,197 @@ export default function ProjectPage() {
               Chat in project
             </Button>
             {canEdit ? (
-              <>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setPending({ kind: "folder", parent: null })}
-                >
-                  <FolderPlus />
-                  New folder
-                </Button>
-                <Button size="sm" onClick={() => setPending({ kind: "document", folder: null })}>
-                  <Plus />
-                  New document
-                </Button>
-              </>
-            ) : null}
-            {isOwner ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-destructive hover:text-destructive"
-                onClick={() => setConfirmingDelete(true)}
-                title="Delete project"
-              >
-                <Trash2 />
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="sm">
+                    <Plus />
+                    New
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onSelect={() => setDialog({ kind: "new-document" })}>
+                    <FilePlus />
+                    Document
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setDialog({ kind: "new-folder" })}>
+                    <FolderPlus />
+                    Folder
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             ) : null}
           </>
         }
       />
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        <div className="mx-auto max-w-3xl">
-          <ProjectTreeView
-            folders={tree.folders}
-            documents={tree.documents}
-            canEdit={Boolean(canEdit)}
-            onOpen={(document) =>
-              router.push(`${projectHref}/documents/${idSlug(document.title, document.id)}`)
-            }
-            onNewFolder={(parent) => setPending({ kind: "folder", parent })}
-            onNewDocument={(folder) => setPending({ kind: "document", folder })}
-          />
-        </div>
-      </div>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
+            <div className="mx-auto max-w-4xl space-y-6">
+              {childFolders.length === 0 && childDocuments.length === 0 ? (
+                <div className="mx-auto max-w-md rounded-xl border border-dashed border-border bg-surface px-8 py-14 text-center">
+                  <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
+                    Nothing here yet.
+                    {canEdit ? " Right-click, or use New, to add a folder or a document." : null}
+                  </p>
+                </div>
+              ) : null}
 
-      <Dialog open={confirmingDelete} onOpenChange={(open) => !open && setConfirmingDelete(false)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete {tree.project?.name ?? "this project"}?</DialogTitle>
-            <DialogDescription>
-              This deletes the project and every folder and document inside it, for
-              everyone it is shared with. This cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" size="sm" onClick={() => setConfirmingDelete(false)} disabled={busy}>
-              Cancel
-            </Button>
-            <Button variant="destructive" size="sm" onClick={() => void deleteProject()} disabled={busy}>
-              {busy ? "Deleting…" : "Delete project"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+              {childFolders.length > 0 ? (
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+                  {childFolders.map((folder) => (
+                    <FolderCard
+                      key={folder.id}
+                      folder={folder}
+                      onOpen={() => router.push(hrefForFolder(folder.id))}
+                      actions={folderActions(folder)}
+                    />
+                  ))}
+                </div>
+              ) : null}
+
+              {childDocuments.length > 0 ? (
+                <div className="space-y-0.5">
+                  {childDocuments.map((document) => (
+                    <DocumentRow
+                      key={document.id}
+                      document={document}
+                      onOpen={() =>
+                        router.push(`${projectHref}/d/${idSlug(document.title, document.id)}`)
+                      }
+                      actions={documentActions(document)}
+                    />
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </ContextMenuTrigger>
+        {canEdit ? (
+          <ContextMenuContent>
+            <ContextMenuItem onSelect={() => setDialog({ kind: "new-document" })}>
+              <FilePlus className="size-3.5" />
+              New document here
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => setDialog({ kind: "new-folder" })}>
+              <FolderPlus className="size-3.5" />
+              New folder here
+            </ContextMenuItem>
+          </ContextMenuContent>
+        ) : null}
+      </ContextMenu>
 
       <NameDialog
-        open={pending?.kind === "folder"}
-        onOpenChange={(open) => !open && setPending(null)}
-        title={
-          pending?.kind === "folder" && pending.parent
-            ? `New folder in ${pending.parent.name}`
-            : "New folder"
-        }
+        open={dialog?.kind === "new-folder"}
+        onOpenChange={(open) => !open && setDialog(null)}
+        title={currentFolder ? `New folder in ${currentFolder.name}` : "New folder"}
         label="Folder name"
         placeholder="Requirements"
         action="Create folder"
         pending={busy}
-        onSubmit={(name) =>
-          void createFolder(name, pending?.kind === "folder" ? pending.parent : null)
-        }
+        onSubmit={(name) => void createFolder(name)}
       />
 
       <NameDialog
-        open={pending?.kind === "document"}
-        onOpenChange={(open) => !open && setPending(null)}
-        title={
-          pending?.kind === "document" && pending.folder
-            ? `New document in ${pending.folder.name}`
-            : "New document"
-        }
+        open={dialog?.kind === "new-document"}
+        onOpenChange={(open) => !open && setDialog(null)}
+        title={currentFolder ? `New document in ${currentFolder.name}` : "New document"}
         label="Document title"
         placeholder="Mission system specification"
         initialValue="Untitled document"
         action="Create document"
         pending={busy}
+        onSubmit={(title) => void createDocument(title)}
+      />
+
+      <NameDialog
+        open={dialog?.kind === "rename-project"}
+        onOpenChange={(open) => !open && setDialog(null)}
+        title="Rename project"
+        label="Project name"
+        initialValue={tree.project?.name ?? ""}
+        action="Rename"
+        pending={busy}
+        onSubmit={(name) => void renameProject(name)}
+      />
+
+      <NameDialog
+        open={dialog?.kind === "rename-folder"}
+        onOpenChange={(open) => !open && setDialog(null)}
+        title="Rename folder"
+        label="Folder name"
+        initialValue={dialog?.kind === "rename-folder" ? dialog.folder.name : ""}
+        action="Rename"
+        pending={busy}
+        onSubmit={(name) => dialog?.kind === "rename-folder" && void renameFolder(dialog.folder, name)}
+      />
+
+      <NameDialog
+        open={dialog?.kind === "rename-document"}
+        onOpenChange={(open) => !open && setDialog(null)}
+        title="Rename document"
+        label="Document title"
+        initialValue={dialog?.kind === "rename-document" ? dialog.document.title : ""}
+        action="Rename"
+        pending={busy}
         onSubmit={(title) =>
-          void createDocument(title, pending?.kind === "document" ? pending.folder : null)
+          dialog?.kind === "rename-document" && void renameDocumentRow(dialog.document, title)
         }
+      />
+
+      <MoveDialog
+        open={dialog?.kind === "move-folder"}
+        onOpenChange={(open) => !open && setDialog(null)}
+        folders={tree.folders}
+        currentFolderId={dialog?.kind === "move-folder" ? dialog.folder.parent_folder_id : null}
+        excludeFolderId={dialog?.kind === "move-folder" ? dialog.folder.id : null}
+        itemLabel="folder"
+        pending={busy}
+        onSubmit={(destination) =>
+          dialog?.kind === "move-folder" && void moveFolder(dialog.folder, destination)
+        }
+      />
+
+      <MoveDialog
+        open={dialog?.kind === "move-document"}
+        onOpenChange={(open) => !open && setDialog(null)}
+        folders={tree.folders}
+        currentFolderId={dialog?.kind === "move-document" ? dialog.document.folder_id : null}
+        itemLabel="document"
+        pending={busy}
+        onSubmit={(destination) =>
+          dialog?.kind === "move-document" && void moveDocumentRow(dialog.document, destination)
+        }
+      />
+
+      <ConfirmDialog
+        open={dialog?.kind === "delete-project"}
+        onOpenChange={(open) => !open && setDialog(null)}
+        title={`Delete ${tree.project?.name ?? "this project"}?`}
+        description="This deletes the project and every folder and document inside it, for everyone it is shared with. This cannot be undone."
+        confirmLabel="Delete project"
+        pending={busy}
+        onConfirm={() => void deleteProject()}
+      />
+
+      <ConfirmDialog
+        open={dialog?.kind === "delete-folder"}
+        onOpenChange={(open) => !open && setDialog(null)}
+        title={dialog?.kind === "delete-folder" ? `Delete ${dialog.folder.name}?` : ""}
+        description="This deletes the folder and every subfolder inside it. Documents inside move to the project root — nothing is destroyed. This cannot be undone."
+        confirmLabel="Delete folder"
+        pending={busy}
+        onConfirm={() => dialog?.kind === "delete-folder" && void deleteFolder(dialog.folder)}
+      />
+
+      <ConfirmDialog
+        open={dialog?.kind === "delete-document"}
+        onOpenChange={(open) => !open && setDialog(null)}
+        title={dialog?.kind === "delete-document" ? `Delete ${dialog.document.title}?` : ""}
+        description="This deletes the document and its entire revision history. This cannot be undone."
+        confirmLabel="Delete document"
+        pending={busy}
+        onConfirm={() => dialog?.kind === "delete-document" && void deleteDocumentRow(dialog.document)}
       />
     </>
   );

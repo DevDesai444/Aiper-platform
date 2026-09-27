@@ -22,12 +22,12 @@ export default function LegacyDocumentRedirect() {
       .getDocument(documentId)
       .then((document) => {
         if (cancelled) return;
-        // The project's own name is not known here; the project segment lands
-        // as a bare id and the document page's own canonical check upgrades it
-        // once it loads the project's tree.
+        // The project's own name is not known here; that segment lands as a
+        // bare id and the /d/ page's own canonical check upgrades it once it
+        // loads the project's tree.
         router.replace(
           document.project_id
-            ? `/projects/${document.project_id}/documents/${idSlug(document.title, document.id)}`
+            ? `/projects/${document.project_id}/d/${idSlug(document.title, document.id)}`
             : "/projects",
         );
       })

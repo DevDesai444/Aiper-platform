@@ -72,7 +72,7 @@ export function AssistantMessage({
       // document page's own canonical check upgrades it once it loads.
       router.push(
         document.project_id
-          ? `/projects/${document.project_id}/documents/${idSlug(document.title, document.id)}`
+          ? `/projects/${document.project_id}/d/${idSlug(document.title, document.id)}`
           : "/projects",
       );
     } catch (error) {
