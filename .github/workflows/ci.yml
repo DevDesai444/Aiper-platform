@@ -71,6 +71,10 @@ jobs:
         working-directory: frontend
         run: npx tsc --noEmit
 
+      - name: Test (npm test)
+        working-directory: frontend
+        run: npm test
+
       - name: Build
         working-directory: frontend
         env:

@@ -81,6 +81,12 @@ test("extractRef: only the trailing characters count, not an id8 earlier in the 
   assert.equal(extractRef(`${ID8}-not-the-end`), null);
 });
 
+test("extractRef: matches the id8 case-insensitively but returns it as found", () => {
+  const upperId8 = ID8.toUpperCase();
+  assert.equal(extractRef(upperId8), upperId8);
+  assert.equal(extractRef(`slug-${upperId8}`), upperId8);
+});
+
 test("round-trips through idSlug for any name, including one that slugifies away", () => {
   for (const name of ["Lunar Lander Avionics", "", "!!!", "Ground Segment 2"]) {
     assert.equal(extractRef(idSlug(name, UUID)), ID8, `failed for name ${JSON.stringify(name)}`);
