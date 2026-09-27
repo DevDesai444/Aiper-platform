@@ -1,6 +1,6 @@
 "use client";
 
-import { FolderPlus, MessagesSquare, Plus } from "lucide-react";
+import { FolderPlus, MessagesSquare, Plus, Trash2 } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -10,6 +10,14 @@ import { NameDialog } from "@/components/projects/name-dialog";
 import { ProjectTreeView } from "@/components/projects/tree";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api } from "@/lib/api";
 import type { Folder, ProjectTree } from "@/lib/types";
@@ -29,6 +37,7 @@ export default function ProjectPage() {
   const [missing, setMissing] = useState(false);
   const [pending, setPending] = useState<Pending>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -50,6 +59,22 @@ export default function ProjectPage() {
   }, [load]);
 
   const canEdit = tree?.project?.access === "owner" || tree?.project?.access === "editor";
+  const isOwner = tree?.project?.access === "owner";
+
+  async function deleteProject() {
+    setBusy(true);
+    try {
+      await api.deleteProject(projectId);
+      toast.success(`Deleted ${tree?.project?.name ?? "the project"}`);
+      await refreshDocuments();
+      router.push("/projects");
+    } catch (error) {
+      toast.error("Could not delete the project", {
+        description: error instanceof Error ? error.message : undefined,
+      });
+      setBusy(false);
+    }
+  }
 
   async function createFolder(name: string, parent: Folder | null) {
     setBusy(true);
@@ -158,6 +183,17 @@ export default function ProjectPage() {
                 </Button>
               </>
             ) : null}
+            {isOwner ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-destructive hover:text-destructive"
+                onClick={() => setConfirmingDelete(true)}
+                title="Delete project"
+              >
+                <Trash2 />
+              </Button>
+            ) : null}
           </>
         }
       />
@@ -176,6 +212,26 @@ export default function ProjectPage() {
           />
         </div>
       </div>
+
+      <Dialog open={confirmingDelete} onOpenChange={(open) => !open && setConfirmingDelete(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete {tree.project?.name ?? "this project"}?</DialogTitle>
+            <DialogDescription>
+              This deletes the project and every folder and document inside it, for
+              everyone it is shared with. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setConfirmingDelete(false)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button variant="destructive" size="sm" onClick={() => void deleteProject()} disabled={busy}>
+              {busy ? "Deleting…" : "Delete project"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <NameDialog
         open={pending?.kind === "folder"}

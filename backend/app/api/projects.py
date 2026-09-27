@@ -20,6 +20,7 @@ from app.services.permissions import (
     effective_access,
     grant_access,
     has_access,
+    require_access,
     requires,
 )
 from app.services.tree import resolve_folder
@@ -73,6 +74,35 @@ async def create_project(
     await db.commit()
     await db.refresh(project)
     return _project_out(project, "owner")
+
+
+@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_project(project_id: uuid.UUID, user: CurrentUser, db: DbSession) -> None:
+    """Delete a project and everything under it. Owner only.
+
+    Folders and documents cascade at the database layer; file assets survive
+    with their project link cleared (an upload is the uploader's, not the
+    project's). The audit event is written before the row goes, because
+    evidence of a deletion must not depend on the deleted row.
+    """
+    await require_access(db, user, "project", project_id, "owner")
+    project = (
+        await db.execute(select(Project).where(Project.id == project_id))
+    ).scalar_one_or_none()
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
+
+    await audit.record_audit(
+        db,
+        org_id=user.org_id,
+        actor_id=user.id,
+        action=audit.PROJECT_DELETE,
+        subject_type="project",
+        subject_id=project.id,
+        payload={"name": project.name},
+    )
+    await db.delete(project)
+    await db.commit()
 
 
 @router.get("", response_model=list[schemas.ProjectOut])

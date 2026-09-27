@@ -117,6 +117,7 @@ export const api = {
   createProject: (body: { name: string; description?: string }) =>
     request<Project>("/api/v1/projects", { method: "POST", body: JSON.stringify(body) }),
   getProjectTree: (id: string) => request<ProjectTree>(`/api/v1/projects/${id}/tree`),
+  deleteProject: (id: string) => request<void>(`/api/v1/projects/${id}`, { method: "DELETE" }),
   createFolder: (projectId: string, body: { name: string; parent_folder_id?: string | null }) =>
     request<Folder>(`/api/v1/projects/${projectId}/folders`, {
       method: "POST",
