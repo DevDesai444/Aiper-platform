@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { toRows } from "@/lib/activity";
 import { Markdown } from "@/lib/markdown";
+import { idSlug } from "@/lib/slug";
 import type { AgentEvent, ChatMessage } from "@/lib/types";
 import { useWorkspace } from "@/lib/workspace";
 
@@ -66,10 +67,12 @@ export function AssistantMessage({
       });
       await refreshDocuments();
       // The response carries where it actually landed — the caller's Workspace
-      // project when the conversation was not scoped to one.
+      // project when the conversation was not scoped to one. The project's own
+      // name is not known here; that segment lands as a bare id and the
+      // document page's own canonical check upgrades it once it loads.
       router.push(
         document.project_id
-          ? `/projects/${document.project_id}/documents/${document.id}`
+          ? `/projects/${document.project_id}/documents/${idSlug(document.title, document.id)}`
           : "/projects",
       );
     } catch (error) {

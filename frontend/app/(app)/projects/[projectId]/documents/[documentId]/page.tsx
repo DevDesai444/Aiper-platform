@@ -9,6 +9,7 @@ import { DocumentEditor } from "@/components/editor/document-editor";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api } from "@/lib/api";
+import { extractId, idSlug } from "@/lib/slug";
 import type { DocumentDetail, Folder } from "@/lib/types";
 
 /** The chain of folders from the project root down to this document. */
@@ -25,7 +26,15 @@ function ancestry(folders: Folder[], folderId: string | null): Folder[] {
 }
 
 export default function ProjectDocumentPage() {
-  const { projectId, documentId } = useParams<{ projectId: string; documentId: string }>();
+  const { projectId: rawProjectParam, documentId: rawDocumentParam } = useParams<{
+    projectId: string;
+    documentId: string;
+  }>();
+  // The slug is cosmetic; only the trailing uuid of each segment is ever
+  // authoritative. A malformed segment is indistinguishable from one the
+  // caller cannot reach — both render as "not found".
+  const projectId = extractId(rawProjectParam);
+  const documentId = extractId(rawDocumentParam);
   const router = useRouter();
 
   const [document, setDocument] = useState<DocumentDetail | null>(null);
@@ -35,6 +44,10 @@ export default function ProjectDocumentPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!projectId || !documentId) {
+      setMissing(true);
+      return;
+    }
     let cancelled = false;
 
     api
@@ -64,6 +77,20 @@ export default function ProjectDocumentPage() {
     };
   }, [documentId, projectId]);
 
+  // Canonical polish: once a name is known, fix up a stale or missing slug in
+  // either segment at once — one replace covers the whole route. A replace,
+  // not a push — no history entry, no navigation flash.
+  useEffect(() => {
+    if (!projectId || !documentId || !document) return;
+    const canonical =
+      `/projects/${idSlug(projectName ?? "", projectId)}` +
+      `/documents/${idSlug(document.title, documentId)}`;
+    const current = `/projects/${rawProjectParam}/documents/${rawDocumentParam}`;
+    if (current !== canonical) router.replace(canonical);
+  }, [projectId, documentId, projectName, document, rawProjectParam, rawDocumentParam, router]);
+
+  const projectHref = projectId ? `/projects/${idSlug(projectName ?? "", projectId)}` : "/projects";
+
   if (missing || error) {
     return (
       <div className="flex flex-1 items-center justify-center px-6">
@@ -80,7 +107,7 @@ export default function ProjectDocumentPage() {
             className="mt-4"
             size="sm"
             variant="outline"
-            onClick={() => router.push(`/projects/${projectId}`)}
+            onClick={() => router.push(projectHref)}
           >
             Back to the project
           </Button>
@@ -89,7 +116,7 @@ export default function ProjectDocumentPage() {
     );
   }
 
-  if (!document) {
+  if (!projectId || !documentId || !document) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="h-9 shrink-0 border-b border-border px-6 py-2">
@@ -116,7 +143,7 @@ export default function ProjectDocumentPage() {
         </Link>
         <ChevronRight className="size-3 shrink-0 opacity-50" />
         <Link
-          href={`/projects/${projectId}`}
+          href={projectHref}
           className="shrink-0 font-medium transition-colors hover:text-foreground"
         >
           {projectName ?? "Project"}
@@ -131,7 +158,7 @@ export default function ProjectDocumentPage() {
         <span className="truncate text-foreground">{document.title}</span>
       </nav>
 
-      <DocumentEditor initial={document} backHref={`/projects/${projectId}`} />
+      <DocumentEditor initial={document} backHref={projectHref} />
     </div>
   );
 }
