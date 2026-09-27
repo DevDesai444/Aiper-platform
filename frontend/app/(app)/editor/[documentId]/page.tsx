@@ -5,6 +5,7 @@ import { useEffect } from "react";
 
 import { Logo } from "@/components/layout/logo";
 import { api } from "@/lib/api";
+import { idSlug } from "@/lib/slug";
 
 /**
  * The flat /editor list is gone: documents live in projects now. Old links are
@@ -21,9 +22,12 @@ export default function LegacyDocumentRedirect() {
       .getDocument(documentId)
       .then((document) => {
         if (cancelled) return;
+        // The project's own name is not known here; that segment lands as a
+        // bare id and the /d/ page's own canonical check upgrades it once it
+        // loads the project's tree.
         router.replace(
           document.project_id
-            ? `/projects/${document.project_id}/documents/${document.id}`
+            ? `/projects/${document.project_id}/d/${idSlug(document.title, document.id)}`
             : "/projects",
         );
       })

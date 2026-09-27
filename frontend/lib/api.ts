@@ -116,13 +116,29 @@ export const api = {
   listProjects: () => request<Project[]>("/api/v1/projects"),
   createProject: (body: { name: string; description?: string }) =>
     request<Project>("/api/v1/projects", { method: "POST", body: JSON.stringify(body) }),
-  getProjectTree: (id: string) => request<ProjectTree>(`/api/v1/projects/${id}/tree`),
+  // `ref` is a full uuid or the 8-hex id a slugged URL carries — resolved
+  // server-side; nothing slug-shaped ever reaches this module.
+  getProjectTree: (ref: string) => request<ProjectTree>(`/api/v1/projects/${ref}/tree`),
+  renameProject: (id: string, name: string) =>
+    request<Project>(`/api/v1/projects/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
   deleteProject: (id: string) => request<void>(`/api/v1/projects/${id}`, { method: "DELETE" }),
   createFolder: (projectId: string, body: { name: string; parent_folder_id?: string | null }) =>
     request<Folder>(`/api/v1/projects/${projectId}/folders`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  renameFolder: (projectId: string, folderId: string, name: string) =>
+    request<Folder>(`/api/v1/projects/${projectId}/folders/${folderId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    }),
+  moveFolder: (projectId: string, folderId: string, parentFolderId: string | null) =>
+    request<Folder>(`/api/v1/projects/${projectId}/folders/${folderId}/move`, {
+      method: "PATCH",
+      body: JSON.stringify({ parent_folder_id: parentFolderId }),
+    }),
+  deleteFolder: (projectId: string, folderId: string) =>
+    request<void>(`/api/v1/projects/${projectId}/folders/${folderId}`, { method: "DELETE" }),
 
   /* templates */
   listTemplates: () => request<DocumentTemplate[]>("/api/v1/templates"),
@@ -155,11 +171,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  getDocument: (id: string) => request<DocumentDetail>(`/api/v1/documents/${id}`),
+  // `ref` is a full uuid or the 8-hex id a slugged `/d/{slug}-{id8}` URL
+  // carries — resolved server-side, same as getProjectTree above.
+  getDocument: (ref: string) => request<DocumentDetail>(`/api/v1/documents/${ref}`),
   renameDocument: (id: string, title: string) =>
     request<DocumentSummary>(`/api/v1/documents/${id}`, {
       method: "PATCH",
       body: JSON.stringify({ title }),
+    }),
+  moveDocument: (id: string, folderId: string | null) =>
+    request<DocumentSummary>(`/api/v1/documents/${id}/move`, {
+      method: "PATCH",
+      body: JSON.stringify({ folder_id: folderId }),
     }),
   deleteDocument: (id: string) => request<void>(`/api/v1/documents/${id}`, { method: "DELETE" }),
   commit: (id: string, body: { content_json: unknown; commit_message: string }) =>
