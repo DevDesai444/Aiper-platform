@@ -28,12 +28,23 @@ export function ShareDialog({
   document,
   canManage,
   onChange,
+  open: controlledOpen,
+  onOpenChange: setControlledOpen,
 }: {
   document: DocumentDetail;
   canManage: boolean;
   onChange: (collaborators: Collaborator[]) => void;
+  /** Externally controlled (e.g. opened from a kebab/context menu on the
+   * Drive row, which has no button of its own for the trigger to render).
+   * Uncontrolled — the default — renders its own trigger button, as in the
+   * editor header. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const isControlled = controlledOpen !== undefined;
+  const open = isControlled ? controlledOpen : uncontrolledOpen;
+  const setOpen = isControlled ? setControlledOpen! : setUncontrolledOpen;
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"editor" | "viewer">("editor");
   const [pending, setPending] = useState(false);
@@ -78,15 +89,17 @@ export function ShareDialog({
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm">
-          <Users />
-          Share
-          {document.collaborators.length > 0 ? (
-            <span className="tabular text-muted-foreground">{document.collaborators.length}</span>
-          ) : null}
-        </Button>
-      </DialogTrigger>
+      {isControlled ? null : (
+        <DialogTrigger asChild>
+          <Button variant="outline" size="sm">
+            <Users />
+            Share
+            {document.collaborators.length > 0 ? (
+              <span className="tabular text-muted-foreground">{document.collaborators.length}</span>
+            ) : null}
+          </Button>
+        </DialogTrigger>
+      )}
 
       <DialogContent>
         <DialogHeader>

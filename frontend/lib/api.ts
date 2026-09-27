@@ -1,6 +1,7 @@
 import { getSupabaseAccessToken, getSupabaseClient, isSupabaseEnabled } from "@/lib/supabase";
 import { chooseBearerToken } from "@/lib/supabase-helpers";
 import type {
+  AuditEntry,
   AuthResponse,
   ChatSession,
   ChatSessionDetail,
@@ -205,6 +206,12 @@ export const api = {
     request<void>(`/api/v1/documents/${documentId}/collaborators/${collaboratorId}`, {
       method: "DELETE",
     }),
+
+  /* audit trail ("Activity"). Newest first; empty means either nothing
+     happened yet or the caller cannot see this subject — the backend does
+     not distinguish the two. */
+  getDocumentAuditLog: (ref: string) => request<AuditEntry[]>(`/api/v1/audit/documents/${ref}`),
+  getProjectAuditLog: (ref: string) => request<AuditEntry[]>(`/api/v1/audit/projects/${ref}`),
 
   /* comments (E6). Envelope shapes: list -> {items: [...]}, resolve ->
      {comments: [...]}. See backend `app/api/documents.py::comments` for the

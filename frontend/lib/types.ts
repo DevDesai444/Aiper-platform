@@ -185,6 +185,18 @@ export interface Diff {
   blocks: DiffBlock[];
 }
 
+/** One row of a project's or document's audit trail — not to be confused
+ * with `ActivityRow`, the chat agent's reasoning-trace feed. */
+export interface AuditEntry {
+  id: number;
+  action: string;
+  actor_id: string | null;
+  actor_name: string | null;
+  actor_email: string | null;
+  created_at: string;
+  payload: Record<string, unknown>;
+}
+
 export interface Health {
   status: string;
   service: string;

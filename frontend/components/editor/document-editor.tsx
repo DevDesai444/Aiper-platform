@@ -9,7 +9,6 @@ import {
   FileDown,
   FileUp,
   GitCommitHorizontal,
-  History,
   MessageSquarePlus,
   MoreHorizontal,
   Trash2,
@@ -32,7 +31,6 @@ import {
   type PMNode,
 } from "@/components/editor/docx-export";
 import { convertDocxToHtml } from "@/components/editor/docx-import";
-import { HistoryPanel } from "@/components/editor/history-panel";
 import { ShareDialog } from "@/components/editor/share-dialog";
 import { EditorToolbar } from "@/components/editor/toolbar";
 import { Badge } from "@/components/ui/badge";
@@ -97,9 +95,6 @@ export function DocumentEditor({
   const [dirty, setDirty] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [commitOpen, setCommitOpen] = useState(false);
-  // Traceability is on by default in the data, not on the screen: commits keep
-  // recording automatically, and the history is here the moment it is asked for.
-  const [historyOpen, setHistoryOpen] = useState(false);
   const [hasSelection, setHasSelection] = useState(false);
   const [compose, setCompose] = useState<CapturedSelection | null>(null);
   const [commentsOpen, setCommentsOpen] = useState(false);
@@ -385,19 +380,6 @@ export function DocumentEditor({
             <Badge variant="default">{headline}</Badge>
           )}
 
-          <Button
-            variant={historyOpen ? "subtle" : "ghost"}
-            size="sm"
-            onClick={() => setHistoryOpen((open) => !open)}
-            aria-pressed={historyOpen}
-          >
-            <History />
-            History
-            {document.revision_count > 0 ? (
-              <span className="tabular text-muted-foreground">{document.revision_count}</span>
-            ) : null}
-          </Button>
-
           <ShareDialog
             document={document}
             canManage={document.access === "owner"}
@@ -476,7 +458,7 @@ export function DocumentEditor({
         </div>
 
         {/* Comments drawer + FAB — absolutely positioned inside the content
-            column so the history panel to the right is unaffected. */}
+            column. */}
         <CommentsPanel
           documentId={document.id}
           access={commentAccess}
@@ -499,10 +481,6 @@ export function DocumentEditor({
           onChange={onImportFileChosen}
         />
       </div>
-
-      {historyOpen ? (
-        <HistoryPanel document={document} readOnly={readOnly} onRestored={setDocument} />
-      ) : null}
 
       <CommitDialog
         open={commitOpen}
@@ -554,9 +532,9 @@ function ImportReplaceDialog({
         <DialogHeader>
           <DialogTitle>Replace the current document?</DialogTitle>
           <DialogDescription>
-            Importing a DOCX overwrites the current draft. Your history is
-            preserved — you can restore any earlier revision from the panel on
-            the right — but the currently uncommitted draft will be replaced.
+            Importing a DOCX overwrites the current draft. Earlier commits are
+            preserved on the server, but the currently uncommitted draft will
+            be replaced.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>

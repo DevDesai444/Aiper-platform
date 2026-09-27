@@ -342,6 +342,15 @@ async def rename_document(
     await resolve_access(db, document_id, user, "editor")
     document = await _load(db, document_id)
     document.title = payload.title
+    await audit.record_audit(
+        db,
+        org_id=document.org_id,
+        actor_id=user.id,
+        action=audit.DOCUMENT_RENAME,
+        subject_type="document",
+        subject_id=document.id,
+        payload={"title": document.title},
+    )
     await db.commit()
     await db.refresh(document)
     return document
