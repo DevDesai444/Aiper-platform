@@ -36,6 +36,7 @@ from app.services.permissions import (
     require_access,
     revoke_access,
 )
+from app.services.refs import resolve_ref
 from app.services.tree import ensure_default_project, resolve_folder
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -249,11 +250,14 @@ async def _new_document(
 async def create_document(
     payload: schemas.DocumentCreate, user: CurrentUser, db: DbSession
 ) -> schemas.DocumentDetail:
+    project_id = await resolve_ref(db, "project", user.org_id, payload.project_id)
+    if project_id is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
     document = await _new_document(
         db,
         user=user,
         title=payload.title,
-        project_id=payload.project_id,
+        project_id=project_id,
         folder_id=payload.folder_id,
     )
     await _commit(
@@ -284,11 +288,16 @@ async def create_from_markdown(
     payload: schemas.DocumentFromMarkdown, user: CurrentUser, db: DbSession
 ) -> schemas.DocumentDetail:
     """The agent's way into version control — first revision is source='agent'."""
+    project_id = None
+    if payload.project_id is not None:
+        project_id = await resolve_ref(db, "project", user.org_id, payload.project_id)
+        if project_id is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
     document = await _new_document(
         db,
         user=user,
         title=payload.title,
-        project_id=payload.project_id,
+        project_id=project_id,
         folder_id=payload.folder_id,
     )
     await _commit(
@@ -312,10 +321,16 @@ async def create_from_markdown(
     return await _detail(db, await _load(db, document.id), "owner")
 
 
-@router.get("/{document_id}", response_model=schemas.DocumentDetail)
+@router.get("/{document_ref}", response_model=schemas.DocumentDetail)
 async def get_document(
-    document_id: uuid.UUID, user: CurrentUser, db: DbSession
+    document_ref: str, user: CurrentUser, db: DbSession
 ) -> schemas.DocumentDetail:
+    """`document_ref` is a full uuid or the 8-hex id a `/d/{slug}-{id8}` URL
+    carries; resolving it is a lookup, not the authorisation boundary — the
+    resolved id still goes through the normal viewer check below."""
+    document_id = await resolve_ref(db, "document", user.org_id, document_ref)
+    if document_id is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
     access = await resolve_access(db, document_id, user, "viewer")
     return await _detail(db, await _load(db, document_id), access)
 
@@ -327,6 +342,40 @@ async def rename_document(
     await resolve_access(db, document_id, user, "editor")
     document = await _load(db, document_id)
     document.title = payload.title
+    await db.commit()
+    await db.refresh(document)
+    return document
+
+
+@router.patch("/{document_id}/move", response_model=schemas.DocumentOut)
+async def move_document(
+    document_id: uuid.UUID, payload: schemas.DocumentMove, user: CurrentUser, db: DbSession
+) -> Document:
+    """Move a document to a different folder within its own project.
+
+    Editor access on the document (touching it at all) and on the destination
+    (placing something there) — the same pair the relocation guard trigger
+    checks; this just gives the clean 404/403 before the trigger would.
+    """
+    await resolve_access(db, document_id, user, "editor")
+    document = await _load(db, document_id)
+
+    destination = await resolve_folder(db, document.project_id, payload.folder_id)
+    if destination is not None:
+        await require_access(db, user, "folder", destination.id, "editor")
+    else:
+        await require_access(db, user, "project", document.project_id, "editor")
+
+    document.folder_id = destination.id if destination else None
+    await audit.record_audit(
+        db,
+        org_id=document.org_id,
+        actor_id=user.id,
+        action=audit.DOCUMENT_MOVE,
+        subject_type="document",
+        subject_id=document.id,
+        payload={"folder_id": str(destination.id) if destination else None},
+    )
     await db.commit()
     await db.refresh(document)
     return document

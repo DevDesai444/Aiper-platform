@@ -79,3 +79,29 @@ async def resolve_folder(
     if folder is None or folder.project_id != project_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Folder not found")
     return folder
+
+
+async def would_cycle(
+    db: AsyncSession, folder_id: uuid.UUID, new_parent_id: uuid.UUID
+) -> bool:
+    """True if placing `folder_id` under `new_parent_id` makes it its own ancestor.
+
+    That happens exactly when `new_parent_id` is `folder_id` itself, or lies
+    inside the subtree rooted at it — checked by walking *up* from
+    `new_parent_id` and looking for `folder_id` along the way, since a folder
+    inside that subtree necessarily has `folder_id` somewhere in its ancestry.
+    Depth-capped like the resolver's own ancestor walk, for the same reason: a
+    cycle already present in the data must not hang this check.
+    """
+    current: uuid.UUID | None = new_parent_id
+    for _ in range(50):
+        if current == folder_id:
+            return True
+        if current is None:
+            return False
+        current = (
+            await db.execute(
+                select(Folder.parent_folder_id).where(Folder.id == current)
+            )
+        ).scalar_one_or_none()
+    return True  # an unresolved walk is not a pass
