@@ -12,6 +12,7 @@ import { NameDialog } from "@/components/projects/name-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
+import { idSlug } from "@/lib/slug";
 import { useWorkspace } from "@/lib/workspace";
 
 export default function ProjectsPage() {
@@ -26,7 +27,7 @@ export default function ProjectsPage() {
       const project = await api.createProject({ name });
       await refreshProjects();
       setDialogOpen(false);
-      router.push(`/projects/${project.id}`);
+      router.push(`/projects/${idSlug(project.name, project.id)}`);
     } catch (error) {
       toast.error("Could not create the project", {
         description: error instanceof Error ? error.message : undefined,
@@ -69,7 +70,7 @@ export default function ProjectsPage() {
             {projects.map((project) => (
               <Link
                 key={project.id}
-                href={`/projects/${project.id}`}
+                href={`/projects/${idSlug(project.name, project.id)}`}
                 className="group flex flex-col rounded-lg border border-border bg-surface p-4 shadow-xs transition-colors hover:border-border-strong hover:bg-accent/40"
               >
                 <div className="flex items-start justify-between gap-3">

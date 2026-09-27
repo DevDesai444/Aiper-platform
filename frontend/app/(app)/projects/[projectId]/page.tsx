@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api } from "@/lib/api";
+import { extractId, idSlug } from "@/lib/slug";
 import type { Folder, ProjectTree } from "@/lib/types";
 import { useWorkspace } from "@/lib/workspace";
 
@@ -29,7 +30,11 @@ type Pending =
   | null;
 
 export default function ProjectPage() {
-  const { projectId } = useParams<{ projectId: string }>();
+  const { projectId: rawParam } = useParams<{ projectId: string }>();
+  // The slug is cosmetic; the trailing uuid is what the API and the resolver
+  // ever see. A segment with no valid uuid tail is indistinguishable from a
+  // project the caller cannot reach — both render as "not found".
+  const projectId = extractId(rawParam);
   const router = useRouter();
   const { refreshDocuments } = useWorkspace();
 
@@ -40,6 +45,10 @@ export default function ProjectPage() {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const load = useCallback(async () => {
+    if (!projectId) {
+      setMissing(true);
+      return;
+    }
     try {
       setTree(await api.getProjectTree(projectId));
     } catch (error) {
@@ -58,10 +67,20 @@ export default function ProjectPage() {
     void load();
   }, [load]);
 
+  // Canonical polish: once the name is known, fix up a stale or missing slug
+  // in place. A replace, not a push — no history entry, no navigation flash.
+  useEffect(() => {
+    if (!projectId || !tree) return;
+    const canonical = idSlug(tree.project?.name ?? "", projectId);
+    if (rawParam !== canonical) router.replace(`/projects/${canonical}`);
+  }, [projectId, rawParam, tree, router]);
+
   const canEdit = tree?.project?.access === "owner" || tree?.project?.access === "editor";
   const isOwner = tree?.project?.access === "owner";
+  const projectHref = projectId ? `/projects/${idSlug(tree?.project?.name ?? "", projectId)}` : "/projects";
 
   async function deleteProject() {
+    if (!projectId) return;
     setBusy(true);
     try {
       await api.deleteProject(projectId);
@@ -77,6 +96,7 @@ export default function ProjectPage() {
   }
 
   async function createFolder(name: string, parent: Folder | null) {
+    if (!projectId) return;
     setBusy(true);
     try {
       await api.createFolder(projectId, { name, parent_folder_id: parent?.id ?? null });
@@ -92,6 +112,7 @@ export default function ProjectPage() {
   }
 
   async function createDocument(title: string, folder: Folder | null) {
+    if (!projectId) return;
     setBusy(true);
     try {
       const document = await api.createDocument({
@@ -101,7 +122,7 @@ export default function ProjectPage() {
       });
       await Promise.all([refreshDocuments(), load()]);
       setPending(null);
-      router.push(`/projects/${projectId}/documents/${document.id}`);
+      router.push(`${projectHref}/documents/${idSlug(document.title, document.id)}`);
     } catch (error) {
       toast.error("Could not create the document", {
         description: error instanceof Error ? error.message : undefined,
@@ -129,7 +150,7 @@ export default function ProjectPage() {
     );
   }
 
-  if (!tree) {
+  if (!projectId || !tree) {
     return (
       <>
         <PageHeader title={<Skeleton className="h-4 w-40" />} />
@@ -205,7 +226,7 @@ export default function ProjectPage() {
             documents={tree.documents}
             canEdit={Boolean(canEdit)}
             onOpen={(document) =>
-              router.push(`/projects/${projectId}/documents/${document.id}`)
+              router.push(`${projectHref}/documents/${idSlug(document.title, document.id)}`)
             }
             onNewFolder={(parent) => setPending({ kind: "folder", parent })}
             onNewDocument={(folder) => setPending({ kind: "document", folder })}

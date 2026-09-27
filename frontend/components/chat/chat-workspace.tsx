@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, streamChat } from "@/lib/api";
+import { idSlug } from "@/lib/slug";
 import type { AgentEvent, ChatMessage, Mode } from "@/lib/types";
 import { useWorkspace } from "@/lib/workspace";
 
@@ -213,7 +214,7 @@ export function ChatWorkspace({
           <>
             {project ? (
               <Button asChild variant="subtle" size="sm" title={`Scoped to ${project.name}`}>
-                <Link href={`/projects/${project.id}`}>
+                <Link href={`/projects/${idSlug(project.name, project.id)}`}>
                   <FolderKanban />
                   <span className="max-w-[160px] truncate">{project.name}</span>
                 </Link>
