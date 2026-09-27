@@ -84,7 +84,17 @@ class Project(Base, TimestampMixin):
     )
 
     org: Mapped[Organisation] = relationship(back_populates="projects")
-    folders: Mapped[list[Folder]] = relationship(back_populates="project")
+    # passive_deletes=True: deleting a project must not have the ORM try to
+    # null out folders.project_id first (its default nullify-on-delete
+    # behaviour for a one-to-many with no cascade configured) — that column is
+    # NOT NULL, and the relocation guard trigger (migration 0003) would refuse
+    # the UPDATE regardless, since a project change looks identical to a
+    # relocation from where the trigger sits. ON DELETE CASCADE on
+    # folders.project_id is left to do this at the database layer, same as
+    # Folder.children below.
+    folders: Mapped[list[Folder]] = relationship(
+        back_populates="project", cascade="all, delete-orphan", passive_deletes=True
+    )
 
 
 class Folder(Base, TimestampMixin):
