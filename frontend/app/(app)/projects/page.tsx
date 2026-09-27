@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/page-header";
 import { ItemMenu, type MenuAction } from "@/components/projects/item-menu";
 import { NameDialog } from "@/components/projects/name-dialog";
+import { ProjectShareDialog } from "@/components/projects/project-share-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -22,6 +23,7 @@ type DialogState =
   | { kind: "new-project" }
   | { kind: "rename-project"; project: Project }
   | { kind: "delete-project"; project: Project }
+  | { kind: "share-project"; project: Project }
   | null;
 
 export default function ProjectsPage() {
@@ -93,6 +95,12 @@ export default function ProjectsPage() {
         label: "Open in chat",
         icon: MessagesSquare,
         onSelect: () => router.push(`/chat?project=${project.id}`),
+      },
+      {
+        key: "share",
+        label: "Share",
+        icon: Users,
+        onSelect: () => setDialog({ kind: "share-project", project }),
       },
       {
         key: "activity",
@@ -224,6 +232,15 @@ export default function ProjectsPage() {
         pending={busy}
         onConfirm={() => dialog?.kind === "delete-project" && void remove(dialog.project)}
       />
+
+      {dialog?.kind === "share-project" ? (
+        <ProjectShareDialog
+          project={dialog.project}
+          canManage={dialog.project.access === "owner"}
+          open
+          onOpenChange={(open) => !open && setDialog(null)}
+        />
+      ) : null}
     </>
   );
 }

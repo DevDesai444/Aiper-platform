@@ -14,6 +14,15 @@ export interface Project {
   access: AccessRole;
 }
 
+/** One access_grants row for a project, with the user's display info joined in. */
+export interface ProjectMember {
+  user_id: string;
+  email: string;
+  full_name: string;
+  role: AccessRole;
+  created_at: string;
+}
+
 export interface Folder {
   id: string;
   project_id: string;

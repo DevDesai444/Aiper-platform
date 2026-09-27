@@ -22,6 +22,7 @@ import { FolderCard } from "@/components/projects/folder-card";
 import type { MenuAction } from "@/components/projects/item-menu";
 import { MoveDialog } from "@/components/projects/move-dialog";
 import { NameDialog } from "@/components/projects/name-dialog";
+import { ProjectShareDialog } from "@/components/projects/project-share-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -87,6 +88,7 @@ export default function ProjectPage() {
   // The row only carries a TreeDocument (no collaborators); Share needs the
   // full DocumentDetail, fetched on demand rather than kept in the tree.
   const [shareTarget, setShareTarget] = useState<DocumentDetail | null>(null);
+  const [shareOpen, setShareOpen] = useState(false);
 
   async function openShare(document: TreeDocument) {
     try {
@@ -462,6 +464,10 @@ export default function ProjectPage() {
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start">
+                  <DropdownMenuItem onSelect={() => setShareOpen(true)}>
+                    <Users />
+                    Share
+                  </DropdownMenuItem>
                   <DropdownMenuItem
                     onSelect={() =>
                       openActivityLog("project", idSlug(tree.project?.name ?? "", projectId ?? ""))
@@ -744,6 +750,15 @@ export default function ProjectPage() {
           }
           open={shareTarget !== null}
           onOpenChange={(open) => !open && setShareTarget(null)}
+        />
+      ) : null}
+
+      {tree.project ? (
+        <ProjectShareDialog
+          project={tree.project}
+          canManage={isOwner}
+          open={shareOpen}
+          onOpenChange={setShareOpen}
         />
       ) : null}
     </>
