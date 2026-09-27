@@ -9,11 +9,12 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 
 from app import schemas
 from app.core.deps import CurrentUser, DbSession
-from app.db.models import Document, Folder, Project
+from app.db.models import AccessGrant, Document, Folder, Project, User
 from app.services import audit
 from app.services.permissions import (
     access_expression,
@@ -21,6 +22,7 @@ from app.services.permissions import (
     grant_access,
     has_access,
     require_access,
+    revoke_access,
 )
 from app.services.refs import resolve_ref
 from app.services.tree import resolve_folder, would_cycle
@@ -380,3 +382,160 @@ async def project_tree(
         folders=[schemas.FolderOut.model_validate(f) for f in folders],
         documents=[schemas.TreeDocument.model_validate(d) for d in documents],
     )
+
+
+# ─────────────────────────────────── members ───────────────────────────────
+#
+# access_grants at project scope, exposed directly — unlike document sharing,
+# there is no separate "pending invite by email" table here: the brief wants
+# a clean 404 for an email that does not resolve to a real user in the
+# caller's own org, not an inert row waiting for someone who may never
+# register. grant_access/revoke_access (services/permissions.py) already do
+# everything a route needs; access_grants already carries full privileges for
+# aiper_app (migration 0003), so this needs no new grant migration.
+
+
+def _member_out(grant: AccessGrant) -> schemas.ProjectMemberOut:
+    return schemas.ProjectMemberOut(
+        user_id=grant.user_id,
+        email=grant.user.email,
+        full_name=grant.user.full_name,
+        role=grant.role,
+        created_at=grant.created_at,
+    )
+
+
+@router.get("/{project_ref}/members", response_model=list[schemas.ProjectMemberOut])
+async def list_members(
+    project_ref: str, user: CurrentUser, db: DbSession
+) -> list[schemas.ProjectMemberOut]:
+    """Everyone with a direct grant on this project, owners included."""
+    project_id = await resolve_ref(db, "project", user.org_id, project_ref)
+    if project_id is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
+    await require_access(db, user, "project", project_id, "viewer")
+
+    grants = (
+        (
+            await db.execute(
+                select(AccessGrant)
+                .options(selectinload(AccessGrant.user))
+                .where(AccessGrant.subject_type == "project", AccessGrant.subject_id == project_id)
+                .order_by(AccessGrant.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [_member_out(grant) for grant in grants]
+
+
+@router.post(
+    "/{project_ref}/members",
+    response_model=schemas.ProjectMemberOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_member(
+    project_ref: str,
+    payload: schemas.ProjectMemberCreate,
+    user: CurrentUser,
+    db: DbSession,
+) -> schemas.ProjectMemberOut:
+    """Grant a member editor or viewer access. Owner only, matching delete_project's threshold."""
+    project_id = await resolve_ref(db, "project", user.org_id, project_ref)
+    if project_id is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
+    await require_access(db, user, "project", project_id, "owner")
+
+    email = payload.email.lower()
+    # Same org only: the resolver would refuse a cross-org grant anyway, but
+    # a clean 404 here beats writing a row that could never authorise anyone.
+    invitee = (
+        await db.execute(
+            select(User).where(User.email == email, User.org_id == user.org_id)
+        )
+    ).scalar_one_or_none()
+    if invitee is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No one with that address in your organisation")
+
+    await grant_access(
+        db,
+        org_id=user.org_id,
+        subject_type="project",
+        subject_id=project_id,
+        user_id=invitee.id,
+        role=payload.role,
+        granted_by=user.id,
+    )
+    await audit.record_audit(
+        db,
+        org_id=user.org_id,
+        actor_id=user.id,
+        action=audit.SHARE_GRANT,
+        subject_type="project",
+        subject_id=project_id,
+        payload={"email": email, "role": payload.role},
+    )
+    await db.commit()
+    grant = (
+        await db.execute(
+            select(AccessGrant)
+            .options(selectinload(AccessGrant.user))
+            .where(
+                AccessGrant.subject_type == "project",
+                AccessGrant.subject_id == project_id,
+                AccessGrant.user_id == invitee.id,
+            )
+        )
+    ).scalar_one()
+    return _member_out(grant)
+
+
+@router.delete("/{project_ref}/members/{target_user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_member(
+    project_ref: str, target_user_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> None:
+    """Revoke a member's access. Owner only; the last owner cannot be removed."""
+    project_id = await resolve_ref(db, "project", user.org_id, project_ref)
+    if project_id is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
+    await require_access(db, user, "project", project_id, "owner")
+
+    target = (
+        await db.execute(
+            select(AccessGrant).where(
+                AccessGrant.subject_type == "project",
+                AccessGrant.subject_id == project_id,
+                AccessGrant.user_id == target_user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Member not found")
+
+    if target.role == "owner":
+        owner_count = (
+            await db.execute(
+                select(func.count()).where(
+                    AccessGrant.subject_type == "project",
+                    AccessGrant.subject_id == project_id,
+                    AccessGrant.role == "owner",
+                )
+            )
+        ).scalar_one()
+        if owner_count <= 1:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "A project must keep at least one owner"
+            )
+
+    await audit.record_audit(
+        db,
+        org_id=user.org_id,
+        actor_id=user.id,
+        action=audit.SHARE_REVOKE,
+        subject_type="project",
+        subject_id=project_id,
+        payload={"user_id": str(target_user_id), "role": target.role},
+    )
+    await revoke_access(db, subject_type="project", subject_id=project_id, user_id=target_user_id)
+    await db.commit()

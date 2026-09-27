@@ -15,6 +15,7 @@ import type {
   Health,
   Mode,
   Project,
+  ProjectMember,
   ProjectTree,
   TemplateSection,
   User,
@@ -123,6 +124,15 @@ export const api = {
   renameProject: (id: string, name: string) =>
     request<Project>(`/api/v1/projects/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
   deleteProject: (id: string) => request<void>(`/api/v1/projects/${id}`, { method: "DELETE" }),
+  listProjectMembers: (id: string) =>
+    request<ProjectMember[]>(`/api/v1/projects/${id}/members`),
+  addProjectMember: (id: string, body: { email: string; role: "editor" | "viewer" }) =>
+    request<ProjectMember>(`/api/v1/projects/${id}/members`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  removeProjectMember: (id: string, userId: string) =>
+    request<void>(`/api/v1/projects/${id}/members/${userId}`, { method: "DELETE" }),
   createFolder: (projectId: string, body: { name: string; parent_folder_id?: string | null }) =>
     request<Folder>(`/api/v1/projects/${projectId}/folders`, {
       method: "POST",
