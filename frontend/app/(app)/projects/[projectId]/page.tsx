@@ -4,11 +4,13 @@ import {
   ChevronRight,
   FilePlus,
   FolderPlus,
+  History,
   MessagesSquare,
   MoreHorizontal,
   Pencil,
   Plus,
   Trash2,
+  Users,
 } from "lucide-react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -33,12 +35,15 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ShareDialog } from "@/components/editor/share-dialog";
+import { openActivityLog } from "@/lib/audit-log";
 import { ApiError, api } from "@/lib/api";
 import { extractRef, idSlug } from "@/lib/slug";
-import type { Folder, ProjectTree, TreeDocument } from "@/lib/types";
+import type { DocumentDetail, Folder, ProjectTree, TreeDocument } from "@/lib/types";
 import { useWorkspace } from "@/lib/workspace";
 
 type DialogState =
@@ -79,6 +84,19 @@ export default function ProjectPage() {
   const [missing, setMissing] = useState(false);
   const [dialog, setDialog] = useState<DialogState>(null);
   const [busy, setBusy] = useState(false);
+  // The row only carries a TreeDocument (no collaborators); Share needs the
+  // full DocumentDetail, fetched on demand rather than kept in the tree.
+  const [shareTarget, setShareTarget] = useState<DocumentDetail | null>(null);
+
+  async function openShare(document: TreeDocument) {
+    try {
+      setShareTarget(await api.getDocument(document.id));
+    } catch (error) {
+      toast.error("Could not open sharing", {
+        description: error instanceof Error ? error.message : undefined,
+      });
+    }
+  }
 
   const load = useCallback(async () => {
     if (!projectId) {
@@ -346,6 +364,18 @@ export default function ProjectPage() {
         icon: FilePlus,
         onSelect: () => router.push(`${projectHref}/d/${idSlug(document.title, document.id)}`),
       },
+      {
+        key: "share",
+        label: "Share",
+        icon: Users,
+        onSelect: () => void openShare(document),
+      },
+      {
+        key: "activity",
+        label: "Activity",
+        icon: History,
+        onSelect: () => openActivityLog("document", idSlug(document.title, document.id)),
+      },
     ];
     if (canEdit) {
       actions.push(
@@ -421,7 +451,7 @@ export default function ProjectPage() {
         title={
           <span className="flex items-center gap-1">
             {title}
-            {isOwner && !currentFolder ? (
+            {tree.project && !currentFolder ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
@@ -432,14 +462,30 @@ export default function ProjectPage() {
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start">
-                  <DropdownMenuItem onSelect={() => setDialog({ kind: "rename-project" })}>
-                    <Pencil />
-                    Rename project
+                  <DropdownMenuItem
+                    onSelect={() =>
+                      openActivityLog("project", idSlug(tree.project?.name ?? "", projectId ?? ""))
+                    }
+                  >
+                    <History />
+                    Activity
                   </DropdownMenuItem>
-                  <DropdownMenuItem destructive onSelect={() => setDialog({ kind: "delete-project" })}>
-                    <Trash2 />
-                    Delete project
-                  </DropdownMenuItem>
+                  {isOwner ? (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={() => setDialog({ kind: "rename-project" })}>
+                        <Pencil />
+                        Rename project
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        destructive
+                        onSelect={() => setDialog({ kind: "delete-project" })}
+                      >
+                        <Trash2 />
+                        Delete project
+                      </DropdownMenuItem>
+                    </>
+                  ) : null}
                 </DropdownMenuContent>
               </DropdownMenu>
             ) : null}
@@ -688,6 +734,18 @@ export default function ProjectPage() {
         pending={busy}
         onConfirm={() => dialog?.kind === "delete-document" && void deleteDocumentRow(dialog.document)}
       />
+
+      {shareTarget ? (
+        <ShareDialog
+          document={shareTarget}
+          canManage={shareTarget.access === "owner"}
+          onChange={(collaborators) =>
+            setShareTarget((current) => (current ? { ...current, collaborators } : current))
+          }
+          open={shareTarget !== null}
+          onOpenChange={(open) => !open && setShareTarget(null)}
+        />
+      ) : null}
     </>
   );
 }
