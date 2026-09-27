@@ -69,6 +69,22 @@ class ProjectOut(ORMModel):
     access: AccessRole
 
 
+class ProjectMemberCreate(BaseModel):
+    email: EmailStr
+    role: Role = "editor"
+
+
+class ProjectMemberOut(BaseModel):
+    """One access_grants row for a project, with the user's display info
+    joined in — the grant itself carries only user_id."""
+
+    user_id: uuid.UUID
+    email: EmailStr
+    full_name: str
+    role: AccessRole
+    created_at: datetime
+
+
 class FolderCreate(BaseModel):
     name: str = Field(max_length=200)
     parent_folder_id: uuid.UUID | None = None
