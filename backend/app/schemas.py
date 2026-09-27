@@ -311,6 +311,18 @@ class RevisionVerifyOut(BaseModel):
     first_broken_revision: uuid.UUID | None = None
 
 
+class AuditEntryOut(BaseModel):
+    """One row of a project's or document's activity log, newest first."""
+
+    id: int
+    action: str
+    actor_id: uuid.UUID | None = None
+    actor_name: str | None = None
+    actor_email: str | None = None
+    created_at: datetime
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
 # ─────────────────────────────── comments (E6) ────────────────────────────────
 
 
