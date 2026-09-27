@@ -42,9 +42,12 @@ services:
       DATABASE_URL: postgresql+asyncpg://aiper_app:${AIPER_APP_DB_PASSWORD:-aiper_app_password}@postgres:5432/${POSTGRES_DB:-aiper_db}
       ALEMBIC_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aiper_user}:${POSTGRES_PASSWORD:-aiper_password}@postgres:5432/${POSTGRES_DB:-aiper_db}
       AIPER_APP_DB_PASSWORD: ${AIPER_APP_DB_PASSWORD:-aiper_app_password}
-      # Dev/demo: keep the legacy self-issued login working until the frontend
-      # moves to supabase-js. Remove (or set 0) and configure SUPABASE_URL +
-      # SUPABASE_JWT_SECRET to switch to the production Supabase identity path.
+      # Supabase identity: set SUPABASE_URL (in .env) and the backend verifies
+      # Supabase JWTs via JWKS. Empty → the legacy self-issued login below.
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-}
+      # Dev/demo fallback: the legacy login stays available while Supabase is
+      # unconfigured; it is ignored on the Supabase path.
       AUTH_LEGACY_LOGIN_ENABLED: "1"
       AIPER_DEV_MODE: "1"
     ports:
