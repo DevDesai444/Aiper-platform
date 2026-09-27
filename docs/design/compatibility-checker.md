@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft for review |
+| **Status** | Approved — tech lead review on PR #14, 2026-09-27 (three rulings folded in below) |
 | **Author** | E9 |
 | **Reviewer** | Tech lead |
 | **Branch** | `e9/compat-design` (design only — no product code) |
@@ -202,12 +202,12 @@ same belt-and-suspenders 0005 gave `document_comments`: the resolver is the
 authority, the denormalised columns give each table's own policies a cheap,
 redundant boundary check. Dictionary tables carry `org_id` only.
 
-### 4.2 DDL sketch — migration `0007_product_tree`
+### 4.2 DDL sketch — migration `0008_product_tree`
 
 Alembic-ready in the platform's idiom (raw SQL for constraints/policies,
-`op.create_table` for structure; shown as SQL here for reviewability). Slot
-numbers 0007/0008 are placeholders — **the lead assigns actual slots at build
-time**, as with 0005.
+`op.create_table` for structure; shown as SQL here for reviewability). Slots
+**0008/0009 are assigned by the lead's review** — 0007 belongs to E2's
+in-flight unit.
 
 ```sql
 -- ── the organisation dictionary ─────────────────────────────────────────
@@ -344,6 +344,12 @@ CREATE TABLE node_parameters (
   project_id      uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   node_id         uuid NOT NULL,
   interface_id    uuid,                 -- NULL = node-level parameter
+  role            text NOT NULL DEFAULT 'bidirectional'
+                  CHECK (role IN ('supply','accept','bidirectional')),
+                  -- directionality across a mate (review ruling on §15's open
+                  -- question): the COLUMN ships in Phase 1 so no backfill is
+                  -- ever needed; the directional comparison rules land in a
+                  -- later phase, and §7 stays symmetric until they do
   raw_name        text NOT NULL,        -- exactly what the supplier wrote: 'BUS_V'
   normalized_name text NOT NULL,        -- fold(raw_name): 'bus_v' (service-maintained)
   definition_id   uuid REFERENCES parameter_definitions(id) ON DELETE SET NULL,
@@ -379,7 +385,10 @@ CREATE TABLE node_parameters (
   CONSTRAINT node_parameters_tolerance_nonneg
     CHECK (tolerance_num IS NULL OR tolerance_num >= 0),
   CONSTRAINT node_parameters_envelope_sane
-    CHECK (min_num IS NULL OR max_num IS NULL OR min_num <= max_num)
+    CHECK (min_num IS NULL OR max_num IS NULL OR min_num <= max_num),
+  -- role is a mate-facing property: node-level parameters stay bidirectional
+  CONSTRAINT node_parameters_role_scope
+    CHECK (interface_id IS NOT NULL OR role = 'bidirectional')
 );
 -- one name per node-level scope, one per interface scope
 CREATE UNIQUE INDEX uq_node_parameters_node_name
@@ -427,7 +436,7 @@ CREATE INDEX node_documents_document_idx ON node_documents (document_id);
 ALTER TABLE documents ADD CONSTRAINT uq_documents_id_project UNIQUE (id, project_id);
 ```
 
-### 4.3 DDL sketch — migration `0008_compat_findings`
+### 4.3 DDL sketch — migration `0009_compat_findings`
 
 ```sql
 CREATE TABLE compat_runs (
@@ -666,7 +675,9 @@ interval(p) = [min, max]                    if envelope given
             = [value, value]                otherwise
 ```
 
-Across a mated interface, for one definition present on both sides:
+Across a mated interface, for one definition present on both sides
+(symmetrically in v1 — the `role` column exists from Phase 1, but directional
+rules are a later phase, per the review ruling):
 
 * intervals **disjoint** → `value_conflict` (severity: `critical` if the
   definition is `critical`, else `warning`);
@@ -963,7 +974,11 @@ UUIDs and every miss being a uniform 404 per `require_access`.
 ## 13. Phased build plan
 
 Each phase is one unit: independently shippable, PR against `main`,
-demo-able on its own. Slot numbers for migrations assigned by the lead.
+demo-able on its own. Migration slots 0008/0009 assigned by the lead's
+review (0007 is E2's). **Phase 1 does not start until E2's in-flight unit
+merges**: P1's shared-file touch points (`models.py`, `schemas.py`,
+`audit.py`, `router.py`, the project page) are contested by it, and E2's
+rework is also the mount point for D11's tab strip.
 
 ### Phase 1 — Product tree: DDL + CRUD + traceability (no checker yet)
 
@@ -971,7 +986,7 @@ demo-able on its own. Slot numbers for migrations assigned by the lead.
 link ICDs to nodes. Standalone value: structure + "which document owns this
 value" traceability.
 
-* Migration `0007_product_tree` (§4.2 + §4.4 RLS + `uq_documents_id_project`).
+* Migration `0008_product_tree` (§4.2 + §4.4 RLS + `uq_documents_id_project`).
 * `app/db/models.py` — additive mapped classes.
 * `app/compat/normalize.py` (the fold), `app/compat/units.py` (registry —
   built here because parameter validation wants dimension checks at write
@@ -993,7 +1008,7 @@ value" traceability.
 
 **Ships:** the 28 V/26 V class of defect caught at design time, in-product.
 
-* Migration `0008_compat_findings` (§4.3 + RLS).
+* Migration `0009_compat_findings` (§4.3 + RLS).
 * `app/compat/{engine,rules,fingerprints,service}.py`; hooks: product-tree
   mutations (in `product_tree.py` handlers), `_commit` in
   `app/api/documents.py` (one guarded call after `reindex_document`, D8/D12
@@ -1044,6 +1059,9 @@ components; no shared-file edits beyond `schemas.py`/`config.py` additive.
 * Dictionary governance hook: when the platform grows an org-admin concept,
   tighten D3's wiki-style policies to it (policy swap migration, no schema
   change).
+* Directional comparison rules for the `role` column P1's DDL already
+  carries (supply must fit within accept; supply↔supply on a mate is its own
+  finding) — §7 stays symmetric until this lands.
 * Optional: mass/power rollups (needs only node-level params + the tree —
   the §4 model already carries everything).
 
@@ -1083,21 +1101,25 @@ verification gate (D10) is what the tests attack, not the model.
   editor, so in practice the project's documents are in scope. *Accepted;
   fixes belong to the retrieval lane, and the checker inherits them for
   free.*
-* **Interval semantics are symmetric.** v1 does not model supply-vs-accept
+* **Interval semantics are symmetric in v1.** Supply-vs-accept
   directionality (source regulates 26 ± 0.5 into a sink accepting 26–30 —
-  containment handles the common case, but "which side must contain which"
-  is not expressed). A `role: supply|accept|bidirectional` column on
-  interface parameters is a cheap phase-4 refinement; the containment rule
-  is conservative in the meantime (marginal-overlap `info` findings surface
-  the ambiguous cases). *Open — flagging for review.*
+  "which side must contain which") is not evaluated by the v1 rules; the
+  containment rule is conservative in the meantime, and marginal-overlap
+  `info` findings surface the ambiguous cases. *Ruled at review:* the
+  `role: supply|accept|bidirectional` column ships in Phase 1's DDL
+  (default `bidirectional`, so no backfill ever), and the directional rules
+  land in a later phase (§13, Phase 4).
 * **Engine synchronicity (D8).** A pathological project (10⁵ parameters)
   would make tree mutations feel slow. The run function is the seam; move
   behind a task runner if it ever bites. *Accepted for v1 scale.*
 * **Unit registry coverage.** Somebody will type a unit the table lacks;
   the failure is a visible finding, and extending the table is a data edit
   with tests. *Accepted by design.*
-* **Slot numbers 0007/0008** and any concurrent claim on
-  `documents.py`/`models.py` need the lead's allocation at Phase 1/2 kickoff.
+* **Sequencing (ruled at review).** Migration slots are 0008/0009 — 0007
+  belongs to E2's in-flight unit — and Phase 1 starts only after that unit
+  merges, since it contests P1's shared files and provides D11's tab mount
+  point. Any further concurrent claim on `documents.py`/`models.py` still
+  goes through the lead at Phase 2 kickoff.
 
 ---
 
