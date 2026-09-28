@@ -45,6 +45,25 @@ FILE_DELETE = "file.delete"
 TEMPLATE_CREATE = "template.create"
 TEMPLATE_DELETE = "template.delete"
 
+# compatibility-checker vocabulary (Phase 1)
+NODE_CREATE = "node.create"
+NODE_UPDATE = "node.update"
+NODE_MOVE = "node.move"
+NODE_DELETE = "node.delete"
+INTERFACE_CREATE = "interface.create"
+INTERFACE_UPDATE = "interface.update"
+INTERFACE_DELETE = "interface.delete"
+MATE_CREATE = "mate.create"
+MATE_DELETE = "mate.delete"
+PARAM_SET = "param.set"
+PARAM_DELETE = "param.delete"
+PARAMDEF_CREATE = "paramdef.create"
+PARAMDEF_UPDATE = "paramdef.update"
+ALIAS_CREATE = "alias.create"
+ALIAS_DELETE = "alias.delete"
+NODEDOC_LINK = "nodedoc.link"
+NODEDOC_UNLINK = "nodedoc.unlink"
+
 _INSERT = text(
     """
     INSERT INTO audit_log (org_id, actor_id, action, subject_type, subject_id, payload)

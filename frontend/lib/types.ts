@@ -228,3 +228,105 @@ export interface DocumentComment {
   resolved_at: string | null;
   created_at: string;
 }
+
+/* ── Product tree (E9 P1) ─────────────────────────────────────────── */
+
+export type NodeKind = "assembly" | "subassembly" | "component" | "part";
+export type InterfaceKind = "power" | "data" | "rf" | "thermal" | "mechanical" | "fluid";
+export type ParameterRole = "supply" | "accept" | "bidirectional";
+export type NodeDocRelation = "reference" | "design-spec" | "test-report" | "sign-off" | "requirement";
+
+export interface ProductNode {
+  id: string;
+  org_id: string;
+  project_id: string;
+  parent_node_id: string | null;
+  kind: NodeKind;
+  name: string;
+  part_number: string | null;
+  supplier: string;
+  description: string;
+  attributes: Record<string, unknown>;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NodeTree {
+  nodes: ProductNode[];
+}
+
+export interface NodeInterface {
+  id: string;
+  org_id: string;
+  project_id: string;
+  node_id: string;
+  kind: InterfaceKind;
+  name: string;
+  description: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InterfaceMate {
+  id: string;
+  org_id: string;
+  project_id: string;
+  interface_a_id: string;
+  interface_b_id: string;
+  note: string;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface NodeParameter {
+  id: string;
+  org_id: string;
+  project_id: string;
+  node_id: string;
+  interface_id: string | null;
+  role: ParameterRole;
+  raw_name: string;
+  normalized_name: string;
+  definition_id: string | null;
+  value_kind: "quantity" | "text";
+  value_num: number | null;
+  unit: string;
+  tolerance_num: number | null;
+  min_num: number | null;
+  max_num: number | null;
+  value_text: string;
+  source_document_id: string | null;
+  source_revision_number: number | null;
+  source_quote: string;
+  note: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NodeDocumentLink {
+  id: string;
+  org_id: string;
+  project_id: string;
+  node_id: string;
+  document_id: string;
+  relation: NodeDocRelation;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface ParameterDefinition {
+  id: string;
+  org_id: string;
+  key: string;
+  display_name: string;
+  dimension: string;
+  canonical_unit: string;
+  criticality: "standard" | "critical";
+  description: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}

@@ -2,7 +2,9 @@
 
 import {
   ChevronRight,
+  Cpu,
   FilePlus,
+  Files,
   FolderPlus,
   History,
   MessagesSquare,
@@ -18,6 +20,7 @@ import { toast } from "sonner";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { DocumentRow } from "@/components/projects/document-row";
+import { ProductTreeTab } from "@/components/projects/product-tree-tab";
 import { FolderCard } from "@/components/projects/folder-card";
 import type { MenuAction } from "@/components/projects/item-menu";
 import { MoveDialog } from "@/components/projects/move-dialog";
@@ -79,6 +82,7 @@ export default function ProjectPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const currentFolderId = searchParams.get("folder");
+  const activeTab = searchParams.get("tab") ?? "documents";
   const { refreshDocuments } = useWorkspace();
 
   const [tree, setTree] = useState<ProjectTree | null>(null);
@@ -143,6 +147,10 @@ export default function ProjectPage() {
     (folderId: string | null) => (folderId ? `${projectHref}?folder=${folderId}` : projectHref),
     [projectHref],
   );
+
+  function tabHref(tab: string) {
+    return tab === "documents" ? projectHref : `${projectHref}?tab=${tab}`;
+  }
 
   const crumbs = useMemo(
     () => (tree ? ancestry(tree.folders, currentFolderId) : []),
@@ -571,6 +579,35 @@ export default function ProjectPage() {
         }
       />
 
+      {/* Tab strip — only show when we can see the project root */}
+      {tree.project && !currentFolderId ? (
+        <div className="flex shrink-0 border-b border-border px-6">
+          {(
+            [
+              { id: "documents", label: "Documents", Icon: Files },
+              { id: "product-tree", label: "Product tree", Icon: Cpu },
+            ] as const
+          ).map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              onClick={() => router.push(tabHref(id))}
+              className={[
+                "flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-[0.8125rem] transition-colors",
+                activeTab === id
+                  ? "border-foreground font-medium text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground",
+              ].join(" ")}
+            >
+              <Icon className="size-3.5" />
+              {label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {activeTab === "product-tree" && projectId ? (
+        <ProductTreeTab projectId={projectId} canEdit={canEdit ?? false} />
+      ) : (
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
@@ -627,6 +664,7 @@ export default function ProjectPage() {
           </ContextMenuContent>
         ) : null}
       </ContextMenu>
+      )}
 
       <NameDialog
         open={dialog?.kind === "new-folder"}
