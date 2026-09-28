@@ -13,7 +13,15 @@ import type {
   DocumentTemplate,
   Folder,
   Health,
+  InterfaceMate,
   Mode,
+  NodeDocRelation,
+  NodeDocumentLink,
+  NodeInterface,
+  NodeParameter,
+  NodeTree,
+  ParameterDefinition,
+  ProductNode,
   Project,
   ProjectMember,
   ProjectTree,
@@ -248,6 +256,73 @@ export const api = {
       `/api/v1/documents/${documentId}/comments/${encodeURIComponent(markId)}`,
       { method: "DELETE" },
     ),
+
+  /* product tree (E9 P1) */
+  listNodes: (projectId: string) =>
+    request<NodeTree>(`/api/v1/projects/${projectId}/nodes`),
+  createNode: (
+    projectId: string,
+    body: { kind: string; name: string; parent_node_id?: string | null; part_number?: string; supplier?: string; description?: string },
+  ) => request<ProductNode>(`/api/v1/projects/${projectId}/nodes`, { method: "POST", body: JSON.stringify(body) }),
+  updateNode: (projectId: string, nodeId: string, body: Partial<ProductNode>) =>
+    request<ProductNode>(`/api/v1/projects/${projectId}/nodes/${nodeId}`, { method: "PUT", body: JSON.stringify(body) }),
+  moveNode: (projectId: string, nodeId: string, parentNodeId: string | null) =>
+    request<ProductNode>(`/api/v1/projects/${projectId}/nodes/${nodeId}/move`, {
+      method: "POST",
+      body: JSON.stringify({ parent_node_id: parentNodeId }),
+    }),
+  deleteNode: (projectId: string, nodeId: string) =>
+    request<void>(`/api/v1/projects/${projectId}/nodes/${nodeId}`, { method: "DELETE" }),
+
+  listInterfaces: (projectId: string, nodeId: string) =>
+    request<NodeInterface[]>(`/api/v1/projects/${projectId}/nodes/${nodeId}/interfaces`),
+  createInterface: (projectId: string, nodeId: string, body: { kind: string; name: string; description?: string }) =>
+    request<NodeInterface>(`/api/v1/projects/${projectId}/nodes/${nodeId}/interfaces`, { method: "POST", body: JSON.stringify(body) }),
+  deleteInterface: (projectId: string, nodeId: string, interfaceId: string) =>
+    request<void>(`/api/v1/projects/${projectId}/nodes/${nodeId}/interfaces/${interfaceId}`, { method: "DELETE" }),
+
+  listMates: (projectId: string) =>
+    request<InterfaceMate[]>(`/api/v1/projects/${projectId}/mates`),
+  createMate: (projectId: string, body: { interface_a_id: string; interface_b_id: string; note?: string }) =>
+    request<InterfaceMate>(`/api/v1/projects/${projectId}/mates`, { method: "POST", body: JSON.stringify(body) }),
+  deleteMate: (projectId: string, mateId: string) =>
+    request<void>(`/api/v1/projects/${projectId}/mates/${mateId}`, { method: "DELETE" }),
+
+  listParameters: (projectId: string, nodeId: string) =>
+    request<NodeParameter[]>(`/api/v1/projects/${projectId}/nodes/${nodeId}/parameters`),
+  setParameter: (
+    projectId: string,
+    nodeId: string,
+    body: {
+      raw_name: string;
+      value_kind: "quantity" | "text";
+      value_num?: number | null;
+      unit?: string;
+      tolerance_num?: number | null;
+      value_text?: string;
+      interface_id?: string | null;
+      role?: string;
+      source_document_id?: string | null;
+      source_revision_number?: number | null;
+      source_quote?: string;
+      note?: string;
+    },
+  ) =>
+    request<NodeParameter>(`/api/v1/projects/${projectId}/nodes/${nodeId}/parameters`, { method: "POST", body: JSON.stringify(body) }),
+  deleteParameter: (projectId: string, nodeId: string, paramId: string) =>
+    request<void>(`/api/v1/projects/${projectId}/nodes/${nodeId}/parameters/${paramId}`, { method: "DELETE" }),
+
+  listNodeDocuments: (projectId: string, nodeId: string) =>
+    request<NodeDocumentLink[]>(`/api/v1/projects/${projectId}/nodes/${nodeId}/documents`),
+  linkNodeDocument: (projectId: string, nodeId: string, body: { document_id: string; relation?: NodeDocRelation }) =>
+    request<NodeDocumentLink>(`/api/v1/projects/${projectId}/nodes/${nodeId}/documents`, { method: "POST", body: JSON.stringify(body) }),
+  unlinkNodeDocument: (projectId: string, nodeId: string, linkId: string) =>
+    request<void>(`/api/v1/projects/${projectId}/nodes/${nodeId}/documents/${linkId}`, { method: "DELETE" }),
+
+  listParameterDefinitions: (orgId: string) =>
+    request<ParameterDefinition[]>(`/api/v1/orgs/${orgId}/parameter-definitions`),
+  createParameterDefinition: (orgId: string, body: { key: string; display_name: string; dimension?: string; canonical_unit?: string; criticality?: string; description?: string }) =>
+    request<ParameterDefinition>(`/api/v1/orgs/${orgId}/parameter-definitions`, { method: "POST", body: JSON.stringify(body) }),
 };
 
 export interface StreamRequest {

@@ -202,12 +202,12 @@ same belt-and-suspenders 0005 gave `document_comments`: the resolver is the
 authority, the denormalised columns give each table's own policies a cheap,
 redundant boundary check. Dictionary tables carry `org_id` only.
 
-### 4.2 DDL sketch — migration `0008_product_tree`
+### 4.2 DDL sketch — migration `0009_product_tree`
 
 Alembic-ready in the platform's idiom (raw SQL for constraints/policies,
 `op.create_table` for structure; shown as SQL here for reviewability). Slots
-**0008/0009 are assigned by the lead's review** — 0007 belongs to E2's
-in-flight unit.
+**0009/0010 are assigned** — 0007 = Drive tree-mutation grants, 0008 =
+activity-log read path (both merged before Phase 1 GO).
 
 ```sql
 -- ── the organisation dictionary ─────────────────────────────────────────
@@ -436,7 +436,7 @@ CREATE INDEX node_documents_document_idx ON node_documents (document_id);
 ALTER TABLE documents ADD CONSTRAINT uq_documents_id_project UNIQUE (id, project_id);
 ```
 
-### 4.3 DDL sketch — migration `0009_compat_findings`
+### 4.3 DDL sketch — migration `0010_compat_findings`
 
 ```sql
 CREATE TABLE compat_runs (
@@ -974,11 +974,11 @@ UUIDs and every miss being a uniform 404 per `require_access`.
 ## 13. Phased build plan
 
 Each phase is one unit: independently shippable, PR against `main`,
-demo-able on its own. Migration slots 0008/0009 assigned by the lead's
-review (0007 is E2's). **Phase 1 does not start until E2's in-flight unit
-merges**: P1's shared-file touch points (`models.py`, `schemas.py`,
-`audit.py`, `router.py`, the project page) are contested by it, and E2's
-rework is also the mount point for D11's tab strip.
+demo-able on its own. Migration slots **0009/0010** (0007 = Drive
+tree-mutation grants, 0008 = activity-log read path, both merged before GO).
+E2's unit has merged: P1's shared-file touch points (`models.py`, `schemas.py`,
+`audit.py`, `router.py`, the project page) are now additive-only onto the
+landed changes, and E2's project-page rework provides D11's tab strip mount.
 
 ### Phase 1 — Product tree: DDL + CRUD + traceability (no checker yet)
 
@@ -986,7 +986,7 @@ rework is also the mount point for D11's tab strip.
 link ICDs to nodes. Standalone value: structure + "which document owns this
 value" traceability.
 
-* Migration `0008_product_tree` (§4.2 + §4.4 RLS + `uq_documents_id_project`).
+* Migration `0009_product_tree` (§4.2 + §4.4 RLS + `uq_documents_id_project`).
 * `app/db/models.py` — additive mapped classes.
 * `app/compat/normalize.py` (the fold), `app/compat/units.py` (registry —
   built here because parameter validation wants dimension checks at write
@@ -1008,7 +1008,7 @@ value" traceability.
 
 **Ships:** the 28 V/26 V class of defect caught at design time, in-product.
 
-* Migration `0009_compat_findings` (§4.3 + RLS).
+* Migration `0010_compat_findings` (§4.3 + RLS).
 * `app/compat/{engine,rules,fingerprints,service}.py`; hooks: product-tree
   mutations (in `product_tree.py` handlers), `_commit` in
   `app/api/documents.py` (one guarded call after `reindex_document`, D8/D12
@@ -1115,11 +1115,11 @@ verification gate (D10) is what the tests attack, not the model.
 * **Unit registry coverage.** Somebody will type a unit the table lacks;
   the failure is a visible finding, and extending the table is a data edit
   with tests. *Accepted by design.*
-* **Sequencing (ruled at review).** Migration slots are 0008/0009 — 0007
-  belongs to E2's in-flight unit — and Phase 1 starts only after that unit
-  merges, since it contests P1's shared files and provides D11's tab mount
-  point. Any further concurrent claim on `documents.py`/`models.py` still
-  goes through the lead at Phase 2 kickoff.
+* **Sequencing (updated at P1 GO).** Migration slots are 0009/0010 — 0007
+  (Drive tree-mutation grants) and 0008 (activity-log read path) are both
+  merged. Phase 1 builds on E2's landed project-page rework; shared-file
+  edits (`models.py`, `schemas.py`, `audit.py`, `router.py`) are additive-only.
+  Any concurrent claim at Phase 2 kickoff still goes through the lead.
 
 ---
 

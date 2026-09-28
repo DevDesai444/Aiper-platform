@@ -375,3 +375,217 @@ class CommentResolveResponse(BaseModel):
     """The updated comments in a thread after a resolve. v1 shape preserved."""
 
     comments: list[CommentOut] = Field(default_factory=list)
+
+
+# ── compatibility checker: product tree (Phase 1) ────────────────────────────
+
+NodeKind = Literal["assembly", "subassembly", "component", "part"]
+InterfaceKind = Literal["power", "data", "rf", "thermal", "mechanical", "fluid"]
+ParameterRole = Literal["supply", "accept", "bidirectional"]
+NodeDocRelation = Literal["reference", "design-spec", "test-report", "sign-off", "requirement"]
+ParameterCriticality = Literal["standard", "critical"]
+AliaSource = Literal["manual", "ai_suggested"]
+
+
+# ── parameter definitions ─────────────────────────────────────────────────────
+
+class ParameterDefinitionCreate(BaseModel):
+    key: str = Field(min_length=1, max_length=200)
+    display_name: str = Field(min_length=1, max_length=200)
+    dimension: str = Field(default="dimensionless", max_length=80)
+    canonical_unit: str = Field(default="", max_length=20)
+    criticality: ParameterCriticality = "standard"
+    description: str = Field(default="", max_length=2000)
+
+
+class ParameterDefinitionUpdate(BaseModel):
+    display_name: str | None = Field(default=None, max_length=200)
+    dimension: str | None = Field(default=None, max_length=80)
+    canonical_unit: str | None = Field(default=None, max_length=20)
+    criticality: ParameterCriticality | None = None
+    description: str | None = Field(default=None, max_length=2000)
+
+
+class ParameterDefinitionOut(ORMModel):
+    id: uuid.UUID
+    org_id: uuid.UUID
+    key: str
+    display_name: str
+    dimension: str
+    canonical_unit: str
+    criticality: str
+    description: str
+    created_by: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AliasCreate(BaseModel):
+    normalized_name: str = Field(min_length=1, max_length=200)
+    source: AliaSource = "manual"
+
+
+class AliasOut(ORMModel):
+    id: uuid.UUID
+    org_id: uuid.UUID
+    definition_id: uuid.UUID
+    normalized_name: str
+    source: str
+    created_by: uuid.UUID | None
+    created_at: datetime
+
+
+# ── product nodes ─────────────────────────────────────────────────────────────
+
+class NodeCreate(BaseModel):
+    parent_node_id: uuid.UUID | None = None
+    kind: NodeKind
+    name: str = Field(min_length=1, max_length=400)
+    part_number: str | None = Field(default=None, max_length=200)
+    supplier: str = Field(default="", max_length=400)
+    description: str = Field(default="", max_length=4000)
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class NodeUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=400)
+    part_number: str | None = Field(default=None, max_length=200)
+    supplier: str | None = Field(default=None, max_length=400)
+    description: str | None = Field(default=None, max_length=4000)
+    attributes: dict[str, Any] | None = None
+    kind: NodeKind | None = None
+
+
+class NodeMove(BaseModel):
+    parent_node_id: uuid.UUID | None = None  # None = move to root
+
+
+class NodeOut(ORMModel):
+    id: uuid.UUID
+    org_id: uuid.UUID
+    project_id: uuid.UUID
+    parent_node_id: uuid.UUID | None
+    kind: str
+    name: str
+    part_number: str | None
+    supplier: str
+    description: str
+    attributes: dict[str, Any]
+    created_by: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class NodeTree(BaseModel):
+    """Flat list of all nodes in a project, clients build the tree client-side."""
+    nodes: list[NodeOut]
+
+
+# ── interfaces ────────────────────────────────────────────────────────────────
+
+class InterfaceCreate(BaseModel):
+    kind: InterfaceKind
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=2000)
+
+
+class InterfaceUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+    kind: InterfaceKind | None = None
+
+
+class InterfaceOut(ORMModel):
+    id: uuid.UUID
+    org_id: uuid.UUID
+    project_id: uuid.UUID
+    node_id: uuid.UUID
+    kind: str
+    name: str
+    description: str
+    created_by: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+# ── interface mates ───────────────────────────────────────────────────────────
+
+class MateCreate(BaseModel):
+    interface_a_id: uuid.UUID
+    interface_b_id: uuid.UUID
+    note: str = Field(default="", max_length=2000)
+
+
+class MateOut(ORMModel):
+    id: uuid.UUID
+    org_id: uuid.UUID
+    project_id: uuid.UUID
+    interface_a_id: uuid.UUID
+    interface_b_id: uuid.UUID
+    note: str
+    created_by: uuid.UUID | None
+    created_at: datetime
+
+
+# ── parameters ────────────────────────────────────────────────────────────────
+
+class ParameterSet(BaseModel):
+    """Upsert payload for a parameter on a node or interface."""
+    interface_id: uuid.UUID | None = None
+    role: ParameterRole = "bidirectional"
+    raw_name: str = Field(min_length=1, max_length=400)
+    value_kind: Literal["quantity", "text"]
+    value_num: float | None = None
+    unit: str = Field(default="", max_length=20)
+    tolerance_num: float | None = None
+    min_num: float | None = None
+    max_num: float | None = None
+    value_text: str = Field(default="", max_length=4000)
+    source_document_id: uuid.UUID | None = None
+    source_revision_number: int | None = None
+    source_quote: str = Field(default="", max_length=2000)
+    note: str = Field(default="", max_length=2000)
+
+
+class ParameterOut(ORMModel):
+    id: uuid.UUID
+    org_id: uuid.UUID
+    project_id: uuid.UUID
+    node_id: uuid.UUID
+    interface_id: uuid.UUID | None
+    role: str
+    raw_name: str
+    normalized_name: str
+    definition_id: uuid.UUID | None
+    value_kind: str
+    value_num: float | None
+    unit: str
+    tolerance_num: float | None
+    min_num: float | None
+    max_num: float | None
+    value_text: str
+    source_document_id: uuid.UUID | None
+    source_revision_number: int | None
+    source_quote: str
+    note: str
+    created_by: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+# ── node documents ────────────────────────────────────────────────────────────
+
+class NodeDocumentLink(BaseModel):
+    document_id: uuid.UUID
+    relation: NodeDocRelation = "reference"
+
+
+class NodeDocumentOut(ORMModel):
+    id: uuid.UUID
+    org_id: uuid.UUID
+    project_id: uuid.UUID
+    node_id: uuid.UUID
+    document_id: uuid.UUID
+    relation: str
+    created_by: uuid.UUID | None
+    created_at: datetime

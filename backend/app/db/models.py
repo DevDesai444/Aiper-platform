@@ -1,4 +1,4 @@
-"""Relational model: tenancy, accounts, sources, conversations and the revision graph."""
+"""Relational model: tenancy, accounts, sources, conversations, revision graph, product tree."""
 
 from __future__ import annotations
 
@@ -9,11 +9,13 @@ from typing import Any, Literal
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Identity,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -474,3 +476,197 @@ class DocumentComment(Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+# ── compatibility checker: product tree (migration 0009) ──────────────────────
+
+
+class ParameterDefinition(Base, TimestampMixin):
+    """Org-wide canonical parameter dictionary entry."""
+
+    __tablename__ = "parameter_definitions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organisations.id", ondelete="CASCADE"))
+    key: Mapped[str] = mapped_column(Text)
+    display_name: Mapped[str] = mapped_column(Text)
+    dimension: Mapped[str] = mapped_column(Text, default="dimensionless")
+    canonical_unit: Mapped[str] = mapped_column(Text, default="")
+    criticality: Mapped[str] = mapped_column(Text, default="standard")
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    __table_args__ = (UniqueConstraint("org_id", "key", name="uq_parameter_definitions_org_key"),)
+
+
+class ParameterAlias(Base):
+    """Folded-name alias mapping into the canonical dictionary."""
+
+    __tablename__ = "parameter_aliases"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organisations.id", ondelete="CASCADE"))
+    definition_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("parameter_definitions.id", ondelete="CASCADE"), index=True
+    )
+    normalized_name: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(Text, default="manual")
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    __table_args__ = (UniqueConstraint("org_id", "normalized_name", name="uq_parameter_aliases_org_name"),)
+
+
+class ProductNode(Base, TimestampMixin):
+    """One node in a project's product/BOM tree."""
+
+    __tablename__ = "product_nodes"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organisations.id", ondelete="CASCADE"), index=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    parent_node_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True
+    )
+    kind: Mapped[str] = mapped_column(Text)
+    name: Mapped[str] = mapped_column(Text)
+    part_number: Mapped[str | None] = mapped_column(Text, nullable=True)
+    supplier: Mapped[str] = mapped_column(Text, default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    attributes: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint("id", "project_id", name="uq_product_nodes_id_project"),
+    )
+
+
+class NodeInterface(Base, TimestampMixin):
+    """A typed port on a product node."""
+
+    __tablename__ = "node_interfaces"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organisations.id", ondelete="CASCADE"), index=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    node_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    kind: Mapped[str] = mapped_column(Text)
+    name: Mapped[str] = mapped_column(Text)
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint("node_id", "name", name="uq_node_interfaces_node_name"),
+        UniqueConstraint("id", "project_id", name="uq_node_interfaces_id_project"),
+        UniqueConstraint("id", "node_id", name="uq_node_interfaces_id_node"),
+    )
+
+
+class InterfaceMate(Base):
+    """An unordered pairing of two interfaces in the same project."""
+
+    __tablename__ = "interface_mates"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organisations.id", ondelete="CASCADE"), index=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    interface_a_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    interface_b_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    __table_args__ = (
+        UniqueConstraint("interface_a_id", "interface_b_id", name="uq_interface_mates_pair"),
+    )
+
+
+class NodeParameter(Base, TimestampMixin):
+    """A parameter value on a node or interface."""
+
+    __tablename__ = "node_parameters"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organisations.id", ondelete="CASCADE"), index=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    node_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    interface_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    role: Mapped[str] = mapped_column(Text, default="bidirectional")
+    raw_name: Mapped[str] = mapped_column(Text)
+    normalized_name: Mapped[str] = mapped_column(Text)
+    definition_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("parameter_definitions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    value_kind: Mapped[str] = mapped_column(Text)
+    value_num: Mapped[float | None] = mapped_column(Numeric, nullable=True)
+    unit: Mapped[str] = mapped_column(Text, default="")
+    tolerance_num: Mapped[float | None] = mapped_column(Numeric, nullable=True)
+    min_num: Mapped[float | None] = mapped_column(Numeric, nullable=True)
+    max_num: Mapped[float | None] = mapped_column(Numeric, nullable=True)
+    value_text: Mapped[str] = mapped_column(Text, default="")
+    source_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("documents.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    source_revision_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_quote: Mapped[str] = mapped_column(Text, default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+class NodeDocument(Base):
+    """Traceability link between a product node and a document."""
+
+    __tablename__ = "node_documents"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organisations.id", ondelete="CASCADE"), index=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    node_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    relation: Mapped[str] = mapped_column(Text, default="reference")
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    __table_args__ = (
+        UniqueConstraint("node_id", "document_id", "relation", name="uq_node_documents"),
+    )
