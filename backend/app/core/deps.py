@@ -132,19 +132,20 @@ async def _provision_from_claims(db: AsyncSession, claims: dict[str, Any]) -> Us
 
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if user is None:
-        # users.org_id is NOT NULL (E2's tenancy): a freshly provisioned account
-        # joins the catch-all organisation here — tenant assignment is a deliberate
-        # act owned by E2. The `organisation` display string is filled from the
-        # token's user_metadata, which the frontend now sends at sign-up. (Follow-up
-        # for E2: org_id could be routed through ensure_organisation() on that same
-        # claim, mirroring the legacy register flow — flagged in the PR.)
-        org = await ensure_organisation(db, "")
+        # users.org_id is NOT NULL (E2's tenancy). A first-sight Supabase account
+        # is routed into the organisation it named at sign-up (sent as
+        # user_metadata.organisation), created on first use — the same slug rule
+        # and the same ensure_organisation() upsert the legacy register flow uses.
+        # A token with no organisation claim slugs to nothing and falls back to
+        # the catch-all "Default" org, exactly as a blank organisation always has.
+        org_name = _organisation_from_claims(claims)
+        org = await ensure_organisation(db, org_name)
         user = User(
             id=user_id,
             email=(claims.get("email") or "").lower(),
             full_name=_full_name_from_claims(claims),
             org_id=org.id,
-            organisation=_organisation_from_claims(claims),
+            organisation=org_name,
             hashed_password="",  # Supabase owns the credential; we store none.
             is_active=True,
         )
