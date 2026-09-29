@@ -11,7 +11,7 @@ import jwt
 import pytest
 from sqlalchemy import func, select
 
-from app.db.models import User
+from app.db.models import Organisation, User
 from app.services.organisations import ensure_organisation
 from tests.conftest import (
     TEST_AUDIENCE,
@@ -60,6 +60,45 @@ async def test_valid_token_provisions_user_once(client, session_factory, supabas
     assert r2.status_code == 200
     assert r2.json()["id"] == str(sub)
     assert await _count_users(session_factory) == 1
+
+
+async def _user_org(session_factory, user_id) -> Organisation:
+    async with session_factory() as s:
+        user = (await s.execute(select(User).where(User.id == user_id))).scalar_one()
+        return (
+            await s.execute(select(Organisation).where(Organisation.id == user.org_id))
+        ).scalar_one()
+
+
+@pytest.mark.asyncio
+async def test_provision_routes_user_into_named_organisation(
+    client, session_factory, supabase_configured
+):
+    """The organisation named in user_metadata becomes the user's tenant,
+    created on first sight — not the catch-all Default org."""
+    sub = uuid.uuid4()
+    token = mint_hs256(
+        sub=sub, email="lead@buffalosat.example", full_name="Lead", organisation="Buffalo Sat Corp"
+    )
+    r = await client.get(ME, headers=_bearer(token))
+    assert r.status_code == 200, r.text
+    org = await _user_org(session_factory, sub)
+    assert org.slug == "buffalo-sat-corp"
+    assert org.slug != "default"
+
+
+@pytest.mark.asyncio
+async def test_provision_without_org_metadata_falls_back_to_default(
+    client, session_factory, supabase_configured
+):
+    """A token carrying no organisation claim still lands somewhere: the
+    catch-all Default org, exactly as a blank organisation always has."""
+    sub = uuid.uuid4()
+    token = mint_hs256(sub=sub, email="solo@example.com", full_name="Solo")
+    r = await client.get(ME, headers=_bearer(token))
+    assert r.status_code == 200, r.text
+    org = await _user_org(session_factory, sub)
+    assert org.slug == "default"
 
 
 @pytest.mark.asyncio
